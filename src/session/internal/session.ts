@@ -181,10 +181,10 @@ const documentReads = (
       snapshotAsOf(host, onLine, token, args),
     ),
     watchDoc: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) =>
-      observe(cache, observers, onLine, token, args, Observers.makeWatch),
+      observe(cache, observers, onLine, usable, token, args, Observers.makeWatch),
     ),
     documentState: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) =>
-      observe(cache, observers, onLine, token, args, (value, version, release) =>
+      observe(cache, observers, onLine, usable, token, args, (value, version, release) =>
         Effect.succeed(Observers.makeState(value, version, release)),
       ),
     ),

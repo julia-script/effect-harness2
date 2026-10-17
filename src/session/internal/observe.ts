@@ -2,17 +2,18 @@ import { Effect } from 'effect'
 import type { Scope } from 'effect'
 import type { JsonObject } from '../../storage/schema/Json.ts'
 import type { SnapshotError } from '../Session.ts'
+import type { SessionClosed, SessionFailed } from '../SessionError.ts'
 import type { Cache, Loaded } from './cache.ts'
 import { checkRecordScope, checkRecordVersion, resolveAddress } from './documents.ts'
 import type { AnyToken } from './documents.ts'
-import type { Attached, Observer, Observers } from './observers.ts'
+import type { Attached, Observers } from './observers.ts'
 import type { OnLine } from './snapshots.ts'
 
-/** Build an observation of a committed value, of a definition version, with its release. */
+/** Build an observation of a committed value of a definition version; `unpin` runs once it retires. */
 export type Create<O> = (
   value: Readonly<JsonObject>,
   version: number,
-  release: Effect.Effect<void>,
+  unpin: Effect.Effect<void>,
 ) => Effect.Effect<Attached<O>>
 
 /** Attach an observation to a loaded incarnation until its scope closes or it retires. */
@@ -26,21 +27,18 @@ const attach = <O>(
     const value = yield* loaded.tracker.value
     const recordId = loaded.record.id
     const acquire = Effect.gen(function* () {
+      // Retirement only unpins: the observer stays attached, so that a close still ends it.
       const unpin = yield* cache.pin(loaded.addressId, recordId)
-      let observer: Observer | undefined
-      let released = false
-      const release = Effect.suspend(() => {
-        if (released || observer === undefined) return Effect.void
-        released = true
-        return Effect.andThen(observers.detach(recordId, observer), unpin)
-      })
-      const attached = yield* create(value, loaded.valueVersion, release)
-      observer = attached.observer
-      yield* observers.attach(recordId, observer)
-      return { attached, release }
+      const attached = yield* create(value, loaded.valueVersion, unpin)
+      yield* observers.attach(recordId, attached.observer)
+      return { attached, unpin }
     })
-    const { attached } = yield* Effect.acquireRelease(acquire, ({ attached: { close }, release }) =>
-      Effect.andThen(release, close),
+    const { attached } = yield* Effect.acquireRelease(acquire, (held) =>
+      Effect.all([
+        observers.detach(recordId, held.attached.observer),
+        held.unpin,
+        held.attached.close,
+      ]),
     )
     return attached.observation
   })
@@ -54,6 +52,7 @@ export const observe = <O>(
   cache: Cache,
   observers: Observers,
   onLine: OnLine,
+  usable: Effect.Effect<void, SessionClosed | SessionFailed>,
   token: AnyToken,
   args: ReadonlyArray<unknown>,
   create: Create<O>,
@@ -66,6 +65,8 @@ export const observe = <O>(
       if (loaded === undefined) return undefined
       yield* checkRecordScope(definition, loaded.record)
       yield* checkRecordVersion(definition, loaded.record, loaded.storedVersion)
+      // The load may have waited on Storage while the Session started closing.
+      yield* usable
       return yield* attach(cache, observers, loaded, create)
     }),
   )

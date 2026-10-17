@@ -98,12 +98,12 @@ export interface Attached<O> {
 
 /**
  * A watch of an incarnation whose committed value is `value`, of definition version `version`.
- * `release` detaches it; it runs once the incarnation retires.
+ * `unpin` runs once the incarnation retires.
  */
 export const makeWatch = Effect.fnUntraced(function* (
   value: Readonly<JsonObject>,
   version: number,
-  release: Effect.Effect<void>,
+  unpin: Effect.Effect<void>,
 ) {
   const queue = yield* Queue.unbounded<Change<JsonObject>, SessionFailed | Cause.Done>()
   const observed = { version }
@@ -123,7 +123,7 @@ export const makeWatch = Effect.fnUntraced(function* (
         } else {
           yield* Queue.offer(queue, { value: next, ops })
         }
-        if (retired) yield* Effect.andThen(Queue.end(queue), release)
+        if (retired) yield* unpin
       }),
     // Pending changes are dropped: a closed or failed Session delivers nothing more.
     end: (failure) =>
@@ -132,7 +132,9 @@ export const makeWatch = Effect.fnUntraced(function* (
         failure === undefined ? Queue.end(queue) : Queue.fail(queue, failure),
       ),
   }
-  const watch: Watch<JsonObject> = { value, changes: Stream.fromQueue(queue) }
+  // Ends after retirement, which stays pending like any change until it is pulled.
+  const changes = Stream.takeUntil(Stream.fromQueue(queue), (change) => change.value === null)
+  const watch: Watch<JsonObject> = { value, changes }
   const attached: Attached<Watch<JsonObject>> = {
     observation: watch,
     observer,
@@ -145,7 +147,7 @@ export const makeWatch = Effect.fnUntraced(function* (
 export const makeState = (
   value: Readonly<JsonObject>,
   version: number,
-  release: Effect.Effect<void>,
+  unpin: Effect.Effect<void>,
 ): Attached<State<JsonObject>> => {
   const readers = new Set<Queue.Queue<Value, Cause.Done>>()
   const observed = { version }
@@ -163,7 +165,7 @@ export const makeState = (
         if (done || observedOps(observed, change).length === 0) return
         current = change.value
         for (const reader of readers) yield* Queue.offer(reader, current)
-        if (current === null) yield* Effect.andThen(finish, release)
+        if (current === null) yield* Effect.andThen(finish, unpin)
       }),
     end: () => finish,
   }

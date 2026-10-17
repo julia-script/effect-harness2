@@ -1,10 +1,11 @@
 /* oxlint-disable max-lines, max-lines-per-function -- ported describe blocks */
 // Ported from pi's `packages/durable/test/session-document-retention.test.ts`. The Session's
-// document cache is bounded by use: documents leave it after the retention period and load from
-// Storage again. Cache sizes are internal here, so eviction shows as Storage document reads.
+// document cache is bounded by use: unattached documents leave it after the retention period and
+// load from Storage again; documents with a watch or a document state never leave it. Cache sizes
+// are internal here, so eviction shows as Storage document reads.
 import { describe, expect, test } from 'bun:test'
-import { Effect } from 'effect'
-import type { Duration, Scope } from 'effect'
+import { Deferred, Effect, Exit, Fiber, Scope, Stream } from 'effect'
+import type { Duration } from 'effect'
 import { TestClock } from 'effect/testing'
 import { Storage } from '../../storage/index.ts'
 import type { Ids, Write } from '../../storage/schema/index.ts'
@@ -49,6 +50,34 @@ const openOver = (storage: Storage.Service, documentRetention: Duration.Input) =
 
 const open = (documentRetention: Duration.Input) =>
   Effect.flatMap(Storage.makeMemory, (storage) => openOver(storage, documentRetention))
+
+/** A memory store whose next `findDocument` waits at a gate, as pi's `holdFindDocument`. */
+const holding = Effect.gen(function* () {
+  const memory = yield* Storage.makeMemory
+  const entered = yield* Deferred.make<void>()
+  const gate = yield* Deferred.make<void>()
+  let held = false
+  const storage: Storage.Service = {
+    ...memory,
+    findDocument: (address, at) =>
+      Effect.suspend(() => {
+        if (!held) return memory.findDocument(address, at)
+        held = false
+        return Effect.andThen(
+          Effect.andThen(Deferred.done(entered, Exit.void), Deferred.await(gate)),
+          memory.findDocument(address, at),
+        )
+      }),
+  }
+  return {
+    storage,
+    entered,
+    gate,
+    hold: () => {
+      held = true
+    },
+  }
+})
 
 /** Run a test body under the TestClock: time moves only by `TestClock.adjust`. */
 const run = <A, E>(body: Effect.Effect<A, E, Scope.Scope>): Promise<A> =>
@@ -110,6 +139,12 @@ const useSessionCounter = (session: Session.Service) =>
 
 const nothing = (session: Session.Service) => session.commit(() => Effect.void)
 
+/** An observation that must exist, attached to `scope`. */
+const attachedTo = <A, E, R>(
+  scope: Scope.Scope,
+  observation: Effect.Effect<A | undefined, E, R | Scope.Scope>,
+) => Scope.provide(Effect.flatMap(observation, Effect.fromNullishOr), scope)
+
 describe('document cache retention', () => {
   test('evicts an unattached document once its retention passed, and loads it again with the same value', () =>
     run(
@@ -146,6 +181,50 @@ describe('document cache retention', () => {
         // The read's own load is evicted right after it, too.
         const second = yield* counting(retained, session.snapshot(CounterDoc, conversationId))
         expect(second.reads).toBeGreaterThan(0)
+      }),
+    ))
+
+  test('never evicts a document a watch or a document state observes, and evicts it once the last detaches', () =>
+    run(
+      Effect.gen(function* () {
+        const retained = yield* open(1_000)
+        const { session } = retained
+        const conversationId = yield* createConversation(session)
+        yield* bump(session, conversationId)
+        const watchScope = yield* Scope.make()
+        const stateScope = yield* Scope.make()
+        const watch = yield* attachedTo(watchScope, session.watchDoc(CounterDoc, conversationId))
+        const state = yield* attachedTo(
+          stateScope,
+          session.documentState(CounterDoc, conversationId),
+        )
+        yield* TestClock.adjust(1_000_000)
+        // Still cached: a commit long after its retention passed loads nothing from Storage.
+        const second = yield* counting(retained, bump(session, conversationId))
+        expect(second.reads).toBe(0)
+        expect((yield* state.get)?.count).toBe(2)
+        const seen = yield* Stream.runCollect(Stream.take(watch.changes, 1))
+        expect(seen.map(({ value }) => value?.count)).toEqual([2])
+        yield* TestClock.adjust(1_000_000)
+        yield* useSessionCounter(session)
+        const read = yield* counting(retained, session.snapshot(CounterDoc, conversationId))
+        expect(read).toEqual({ value: { count: 2 }, reads: 0 })
+
+        // The state alone still keeps it.
+        yield* Scope.close(watchScope, Exit.void)
+        yield* TestClock.adjust(1_000_000)
+        const third = yield* counting(retained, bump(session, conversationId))
+        expect(third.reads).toBe(0)
+        expect((yield* state.get)?.count).toBe(3)
+
+        // Once the last detaches, it is idle again and leaves after the retention.
+        yield* Scope.close(stateScope, Exit.void)
+        yield* TestClock.adjust(1_000_000)
+        yield* nothing(session)
+        yield* useSessionCounter(session)
+        const after = yield* counting(retained, session.snapshot(CounterDoc, conversationId))
+        expect(after.value).toEqual({ count: 3 })
+        expect(after.reads).toBeGreaterThan(0)
       }),
     ))
 
@@ -317,6 +396,107 @@ describe('document cache retention', () => {
       }),
     ))
 
+  test('does not keep a replacement cached for an observer of the retired incarnation', () =>
+    run(
+      Effect.gen(function* () {
+        const retained = yield* open(0)
+        const { session } = retained
+        const conversationId = yield* createConversation(session)
+        yield* bump(session, conversationId)
+        const state = yield* Effect.flatMap(
+          session.documentState(CounterDoc, conversationId),
+          Effect.fromNullishOr,
+        )
+        yield* session.commit((tx) => tx.retireDoc(CounterDoc, conversationId))
+        expect(yield* state.get).toBeNull()
+        yield* bump(session, conversationId, 5)
+        const read = yield* counting(retained, session.snapshot(CounterDoc, conversationId))
+        expect(read.value).toEqual({ count: 5 })
+        expect(read.reads).toBeGreaterThan(0)
+      }),
+    ))
+
+  test('refuses an observer whose load loses a race with close', () =>
+    run(
+      Effect.gen(function* () {
+        const held = yield* holding
+        const sessionScope = yield* Scope.make()
+        const { session } = yield* Scope.provide(openOver(held.storage, 0), sessionScope)
+        const conversationId = yield* createConversation(session)
+        yield* bump(session, conversationId)
+        held.hold()
+        const attaching = yield* Effect.forkChild(
+          Effect.scoped(Effect.exit(session.documentState(CounterDoc, conversationId))),
+        )
+        yield* Deferred.await(held.entered)
+        const closing = yield* Effect.forkChild(Scope.close(sessionScope, Exit.void))
+        yield* Effect.yieldNow
+        yield* Deferred.done(held.gate, Exit.void)
+        const attached = yield* Fiber.join(attaching)
+        yield* Fiber.join(closing)
+        // pi rejects the attach; a pin it left behind would be unobservable once closed.
+        expect(Exit.isFailure(attached)).toBe(true)
+      }),
+    ))
+
+  test('leaves no pin behind when an attaching observer is interrupted or fails', () =>
+    run(
+      Effect.gen(function* () {
+        const held = yield* holding
+        const retained = yield* openOver(held.storage, 0)
+        const { session } = retained
+        const conversationId = yield* createConversation(session)
+        yield* bump(session, conversationId)
+        held.hold()
+        const attaching = yield* Effect.forkChild(
+          Effect.scoped(session.documentState(CounterDoc, conversationId)),
+        )
+        yield* Deferred.await(held.entered)
+        yield* Fiber.interrupt(attaching)
+        yield* Deferred.done(held.gate, Exit.void)
+        // Retention 0: once the line sweeps, every read loads from Storage, so nothing is pinned.
+        const unpinned = Effect.gen(function* () {
+          yield* nothing(session)
+          for (let n = 0; n < 2; n++) {
+            const read = yield* counting(retained, session.snapshot(CounterDoc, conversationId))
+            expect(read.value).toEqual({ count: 1 })
+            expect(read.reads).toBeGreaterThan(0)
+          }
+        })
+        yield* unpinned
+        // An observer whose scope fails right after it attached detaches, too.
+        const failed = yield* Effect.exit(
+          Effect.scoped(
+            Effect.andThen(
+              session.watchDoc(CounterDoc, conversationId),
+              Effect.fail('after attach'),
+            ),
+          ),
+        )
+        expect(Exit.isFailure(failed)).toBe(true)
+        yield* unpinned
+      }),
+    ))
+
+  test('evicts on its timer after an observer detaches, and tolerates a detach run twice', () =>
+    run(
+      Effect.gen(function* () {
+        const retained = yield* open(20)
+        const { session } = retained
+        const conversationId = yield* createConversation(session)
+        yield* bump(session, conversationId)
+        const scope = yield* Scope.make()
+        yield* attachedTo(scope, session.documentState(CounterDoc, conversationId))
+        yield* Scope.close(scope, Exit.void)
+        yield* Scope.close(scope, Exit.void)
+        // No commit: the timer alone evicts it.
+        yield* TestClock.adjust(20)
+        const read = yield* counting(retained, session.snapshot(CounterDoc, conversationId))
+        expect(read.value).toEqual({ count: 1 })
+        expect(read.reads).toBeGreaterThan(0)
+      }),
+    ))
+
   test('migrates a document again after its eviction', () =>
     run(
       Effect.gen(function* () {
@@ -347,6 +527,44 @@ describe('document cache retention', () => {
         expect(yield* session.snapshot(V2)).toEqual({ count: 1, migrated: true })
         // Not written back, so each cold load migrates again.
         expect(migrations).toBe(2)
+      }),
+    ))
+
+  test('keeps a reloaded newer version cached while an observer of the older one is attached', () =>
+    run(
+      Effect.gen(function* () {
+        const V1 = Document.make<Counter>({
+          kind: 'test.retention.versioned',
+          version: 1,
+          scope: 'session',
+          initial: () => Effect.succeed({ count: 3 }),
+        })
+        const V2 = Document.make<Counter & { v2: true }>({
+          kind: 'test.retention.versioned',
+          version: 2,
+          scope: 'session',
+          initial: () => Effect.succeed({ count: 0, v2: true }),
+          migrate: (value) =>
+            Effect.succeed({
+              count: typeof value['count'] === 'number' ? value['count'] : 0,
+              v2: true as const,
+            }),
+        })
+        const retained = yield* open(0)
+        const { session } = retained
+        yield* session.commit((tx) => Effect.asVoid(tx.doc(V1)))
+        const scope = yield* Scope.make()
+        yield* attachedTo(scope, session.documentState(V1))
+        // The newer token reloads; the observer's pin keeps the reloaded tracker cached.
+        const reload = yield* counting(retained, session.snapshot(V2))
+        expect(reload.value).toEqual({ count: 3, v2: true })
+        expect(reload.reads).toBeGreaterThan(0)
+        const cached = yield* counting(retained, session.snapshot(V2))
+        expect(cached).toEqual({ value: { count: 3, v2: true }, reads: 0 })
+        yield* Scope.close(scope, Exit.void)
+        yield* nothing(session)
+        const after = yield* counting(retained, session.snapshot(V2))
+        expect(after.reads).toBeGreaterThan(0)
       }),
     ))
 

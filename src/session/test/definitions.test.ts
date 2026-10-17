@@ -1,14 +1,15 @@
 /* oxlint-disable max-lines-per-function -- ported describe blocks */
 /**
- * Ported from pi's `packages/durable/test/session-definitions.test.ts`. Document states, watches,
- * and typed entry tokens are not ported.
+ * Ported from pi's `packages/durable/test/session-definitions.test.ts`. Typed entry tokens are not
+ * ported.
  */
 import { describe, expect, expectTypeOf, test } from 'bun:test'
 import { Effect } from 'effect'
+import type { Scope } from 'effect'
 import type { Tracker } from '../../delta/index.ts'
 import type { Ids } from '../../storage/schema/index.ts'
 import { Document, SessionError } from '../index.ts'
-import type { Session } from '../index.ts'
+import type { Observation, Session } from '../index.ts'
 import { createConversation, createTask, runSession } from './support.ts'
 
 type State = { value: number }
@@ -63,6 +64,16 @@ const TaskFamily = Document.makeFamily<State, number>({
 
 type Drafted = Tracker.Draft<State>
 type Read = Readonly<State> | undefined
+type StateOf = Effect.Effect<
+  Observation.State<State> | undefined,
+  Session.SnapshotError,
+  Scope.Scope
+>
+type WatchOf = Effect.Effect<
+  Observation.Watch<State> | undefined,
+  Session.SnapshotError,
+  Scope.Scope
+>
 
 /** Every typed acquisition and retirement overload; compiled, and run by the next test. */
 const acquireAll = (tx: Session.Tx, conversationId: Ids.ConversationId, taskId: Ids.TaskId) =>
@@ -116,7 +127,54 @@ const rejectedOverloads = (
   session.snapshotAsOf(SessionDoc, conversationId, at),
   // @ts-expect-error task documents keep no history
   session.snapshotAsOf(TaskDoc, taskId, at),
+  // @ts-expect-error a watch of a Session document takes no owner
+  session.watchDoc(SessionDoc, conversationId),
+  // @ts-expect-error a state of a conversation document requires a conversation ID
+  session.documentState(LatestDoc),
+  // @ts-expect-error observations never take a creation seed
+  session.documentState(SessionFamily, 'k', 1),
+  // @ts-expect-error a task document is observed by its task ID
+  session.watchDoc(TaskDoc, conversationId),
 ]
+
+/** Every typed state and watch overload; compiled, and run by the next test. */
+const observeAll = (
+  session: Session.Service,
+  conversationId: Ids.ConversationId,
+  taskId: Ids.TaskId,
+) => {
+  const states = [
+    session.documentState(SessionDoc),
+    session.documentState(LatestDoc, conversationId),
+    session.documentState(TaskDoc, taskId),
+    session.documentState(SessionFamily, 'k'),
+    session.documentState(ConversationFamily, conversationId, 'k'),
+    session.documentState(TaskFamily, taskId, 'k'),
+  ]
+  expectTypeOf(session.documentState(SessionDoc)).toEqualTypeOf<StateOf>()
+  expectTypeOf(session.documentState(LatestDoc, conversationId)).toEqualTypeOf<StateOf>()
+  expectTypeOf(session.documentState(TaskDoc, taskId)).toEqualTypeOf<StateOf>()
+  expectTypeOf(session.documentState(SessionFamily, 'k')).toEqualTypeOf<StateOf>()
+  expectTypeOf(
+    session.documentState(ConversationFamily, conversationId, 'k'),
+  ).toEqualTypeOf<StateOf>()
+  expectTypeOf(session.documentState(TaskFamily, taskId, 'k')).toEqualTypeOf<StateOf>()
+  const watches = [
+    session.watchDoc(SessionDoc),
+    session.watchDoc(LatestDoc, conversationId),
+    session.watchDoc(TaskDoc, taskId),
+    session.watchDoc(SessionFamily, 'k'),
+    session.watchDoc(ConversationFamily, conversationId, 'k'),
+    session.watchDoc(TaskFamily, taskId, 'k'),
+  ]
+  expectTypeOf(session.watchDoc(SessionDoc)).toEqualTypeOf<WatchOf>()
+  expectTypeOf(session.watchDoc(LatestDoc, conversationId)).toEqualTypeOf<WatchOf>()
+  expectTypeOf(session.watchDoc(TaskDoc, taskId)).toEqualTypeOf<WatchOf>()
+  expectTypeOf(session.watchDoc(SessionFamily, 'k')).toEqualTypeOf<WatchOf>()
+  expectTypeOf(session.watchDoc(ConversationFamily, conversationId, 'k')).toEqualTypeOf<WatchOf>()
+  expectTypeOf(session.watchDoc(TaskFamily, taskId, 'k')).toEqualTypeOf<WatchOf>()
+  return { states, watches }
+}
 
 describe('document definitions', () => {
   test('validates persisted version semantics', () =>
@@ -174,6 +232,31 @@ describe('document definitions', () => {
         expect(yield* session.snapshot(TaskFamily, taskId, 'k')).toBeUndefined()
         // Not retired above: the rewindable singleton stays.
         expect(yield* session.snapshot(RewindableDoc, conversationId)).toEqual({ value: 10 })
+      }),
+    ))
+
+  test('types and resolves every document state and watch overload', () =>
+    runSession(({ session }) =>
+      Effect.gen(function* () {
+        const conversationId = yield* createConversation(session)
+        const taskId = yield* createTask(session, conversationId)
+        yield* session.commit((tx) => acquireAll(tx, conversationId, taskId))
+        const { states, watches } = observeAll(session, conversationId, taskId)
+        const values = yield* Effect.forEach(states, (state) =>
+          Effect.flatMap(state, (attached) => attached?.get ?? Effect.undefined),
+        )
+        expect(values).toEqual([
+          { value: 10 },
+          { value: 10 },
+          { value: 10 },
+          { value: 11 },
+          { value: 12 },
+          { value: 13 },
+        ])
+        const baselines = yield* Effect.forEach(watches, (watch) =>
+          Effect.map(watch, (attached) => attached?.value),
+        )
+        expect<ReadonlyArray<unknown>>(baselines).toEqual(values)
       }),
     ))
 

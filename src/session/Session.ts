@@ -3,16 +3,14 @@
  * publication of what each commit changed. Ported from pi's `packages/durable/src/session`.
  */
 import { Context, Layer, Schema } from 'effect'
-import type { Effect, PubSub, Scope } from 'effect'
+import type { Duration, Effect, PubSub, Scope } from 'effect'
 import type { Storage } from '../storage/Storage.ts'
 import { StorageError } from '../storage/StorageError.ts'
 import type { StorageRequestError } from '../storage/StorageError.ts'
 import { ConversationRecord } from '../storage/schema/Conversation.ts'
-import { DocumentCopySource, DocumentRecord, Op } from '../storage/schema/Document.ts'
 import { EntryRecord } from '../storage/schema/Entry.ts'
 import { ConversationId, EntryId, Seq, TaskId } from '../storage/schema/Ids.ts'
 import type { SubmissionId } from '../storage/schema/Ids.ts'
-import { JsonObject } from '../storage/schema/Json.ts'
 import type {
   ConversationQuery,
   Cursor,
@@ -23,8 +21,10 @@ import type {
 import { SubmissionRecord } from '../storage/schema/Submission.ts'
 import type { SubmissionCreate } from '../storage/schema/Submission.ts'
 import { TaskRecord } from '../storage/schema/Task.ts'
+import * as Document from './Document.ts'
 import * as internal from './internal/session.ts'
 import type {
+  DocumentError,
   ReadAfterWrite,
   SessionClosed,
   SessionFailed,
@@ -105,28 +105,8 @@ export const TransactionScope = Schema.Struct({
 export type TransactionScope = typeof TransactionScope.Type
 
 /** Committed change of one document incarnation. */
-export const DocumentCommitChange = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal('document'),
-    record: DocumentRecord,
-    /** Conversation owning the document; task documents take their task's. */
-    conversationId: Schema.UndefinedOr(ConversationId),
-    /** Definition version of `value`; absent when this commit retired the incarnation. */
-    version: Schema.UndefinedOr(Schema.Int),
-    /** Adopted revision, or `null` when this commit retired the incarnation. */
-    value: Schema.NullOr(JsonObject),
-    /** Adopted operations of an ordinary update; empty for creation and retirement. */
-    ops: Schema.Array(Op),
-  }),
-  Schema.Struct({
-    /** Definition-free child initialization of a fork. */
-    type: Schema.Literal('document.copy'),
-    record: DocumentRecord,
-    conversationId: ConversationId,
-    source: DocumentCopySource,
-  }),
-])
-export type DocumentCommitChange = typeof DocumentCommitChange.Type
+export const DocumentCommitChange = Document.CommitChange
+export type DocumentCommitChange = Document.CommitChange
 
 /** A complete table record, published as the write that committed it. */
 export const TableCommitChange = Schema.Union([
@@ -157,8 +137,14 @@ export type TxError = TransactionError | SessionFailed
 /** How a `Tx` table read fails. */
 export type TxReadError = TxError | ReadAfterWrite | StorageRequestError
 
+/** How a `Tx` document operation fails. */
+export type TxDocumentError = TxError | DocumentError | StorageRequestError
+
 /** How a commit fails besides its callback's own errors. */
-export type CommitError = TxError | SessionClosed | StorageRequestError
+export type CommitError = TxError | DocumentError | SessionClosed | StorageRequestError
+
+/** How a committed document read fails. */
+export type SnapshotError = DocumentError | SessionFailed | SessionClosed | StorageRequestError
 
 /**
  * The transaction of one commit callback. Reads see committed state only, and only before the
@@ -242,6 +228,8 @@ export interface Tx {
    * retire in the same commit.
    */
   readonly setTask: (record: TaskRecord) => Effect.Effect<TaskRecord, TxError>
+  readonly doc: Document.Acquire
+  readonly retireDoc: Document.Retire
 }
 
 /**
@@ -268,6 +256,19 @@ export interface Service {
   readonly subscribe: Effect.Effect<PubSub.Subscription<CommitPublication>, never, Scope.Scope>
   /** Succeeds once the Session ended: its scope closed, or Storage failed it. */
   readonly ended: Effect.Effect<SessionEnd>
+  readonly snapshot: Document.Snapshot
+  readonly snapshotAsOf: Document.SnapshotAsOf
+  /** Drop every loaded document tracker; later access loads from Storage. */
+  readonly unloadDocuments: Effect.Effect<void, SessionClosed | SessionFailed>
+}
+
+/** How a Session runs. */
+export interface Options {
+  /**
+   * How long a loaded document stays cached after its last use. Default: ten minutes. `0` evicts
+   * right after use; `Infinity` keeps documents for the Session's lifetime.
+   */
+  readonly documentRetention?: Duration.Input
 }
 
 /** The Session kernel of a durable harness. */
@@ -276,7 +277,15 @@ export class Session extends Context.Service<Session, Service>()(
 ) {}
 
 /** Open a Session over the `Storage` in context. Closing the scope closes the Session. */
-export const make: Effect.Effect<Service, never, Storage | Scope.Scope> = internal.make
+export const makeWith: (options: Options) => Effect.Effect<Service, never, Storage | Scope.Scope> =
+  internal.make
+
+/** `makeWith` with the default options. */
+export const make: Effect.Effect<Service, never, Storage | Scope.Scope> = makeWith({})
 
 /** A `Session` over the `Storage` provided to the layer. */
-export const layer: Layer.Layer<Session, never, Storage> = Layer.effect(Session, make)
+export const layerWith = (options: Options): Layer.Layer<Session, never, Storage> =>
+  Layer.effect(Session, makeWith(options))
+
+/** `layerWith` with the default options. */
+export const layer: Layer.Layer<Session, never, Storage> = layerWith({})

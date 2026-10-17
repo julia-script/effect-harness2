@@ -5,6 +5,7 @@ import { DocumentId, ROOT_CONVERSATION_ID, ConversationId } from '../../../stora
 import type { EntryId } from '../../../storage/schema/Ids.ts'
 import type { Cursor, DocumentQuery } from '../../../storage/schema/Scan.ts'
 import type { ConversationOwnership } from '../../Session.ts'
+import { addressId } from '../documents.ts'
 import { assertOpen, currentTask, rejected } from './state.ts'
 import type { ForkCopy, TxState } from './state.ts'
 
@@ -13,10 +14,6 @@ const SCAN_PAGE_SIZE = 256
 type ConversationParent = NonNullable<ConversationRecord['parent']>
 type ForkPolicy = 'asOf' | 'current'
 type ConversationDocument = Extract<DocumentRecord, { readonly history: 'latest' | 'rewindable' }>
-
-/** Stable identity of one logical document address in a conversation. */
-const addressId = (record: ForkCopy['record']): string =>
-  JSON.stringify([record.kind, record.scope.conversationId, record.key ?? null])
 
 /** The child record copying one parent document. */
 const copyRecord = (
@@ -117,7 +114,20 @@ export const stageConversation = Effect.fnUntraced(function* (
   }
   const copies = parent === undefined ? [] : yield* prepareForkCopies(state, parent, id)
   yield* assertOpen(state)
-  state.forkCopies.push(...copies)
+  for (const copy of copies) {
+    state.forkSourceDocuments.add(copy.source.id)
+    const { kind, scope, key } = copy.record
+    const address = key === undefined ? { kind, scope } : { kind, scope, key }
+    const entry = {
+      addressId: addressId(address),
+      address,
+      target: { kind: 'fork-copy' as const, ...copy },
+      retireOnCommit: false,
+    }
+    state.documents.push(entry)
+    state.latestDocuments.set(entry.addressId, entry)
+  }
+  if (parent !== undefined) state.forkSourceConversations.add(parent.conversationId)
   state.createdConversations.add(id)
   state.writes.push({ type: 'conversation', value: record })
   return record

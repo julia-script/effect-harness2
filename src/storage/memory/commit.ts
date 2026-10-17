@@ -1,3 +1,4 @@
+import { Effect } from 'effect'
 import { Seq } from '../schema/index.ts'
 import type {
   ConversationRecord,
@@ -12,8 +13,9 @@ import {
   prepareDocumentActions,
   resolveDocumentCopies,
 } from './documents.ts'
+import type { ResolvedWrite } from './documents.ts'
 import {
-  assertOpen,
+  ensureOpen,
   freeze,
   getOrCreate,
   insertMapId,
@@ -21,6 +23,7 @@ import {
   removeSorted,
 } from './state.ts'
 import type { State, TableName } from './state.ts'
+import { StorageError } from '../StorageError.ts'
 
 /** The table and ID a write creates or replaces; document changes and retirements claim none. */
 const claimOf = (
@@ -33,29 +36,41 @@ const claimOf = (
   return { table: write.type, id: write.value.id }
 }
 
+/** Why a write cannot claim its ID, given the IDs claimed earlier in the same batch. */
+const claimProblem = (
+  state: State,
+  claimed: ReadonlyMap<number, TableName>,
+  table: TableName,
+  id: number,
+): string | undefined => {
+  const existing = state.recordTypes.get(id)
+  const earlier = claimed.get(id)
+  if (table === 'conversation' || table === 'entry' || table === 'document') {
+    // Immutable records are created exactly once.
+    if (existing !== undefined) return `ID ${id} already belongs to ${existing}`
+    if (earlier !== undefined) return `ID ${id} is written more than once`
+    return undefined
+  }
+  // Tasks and submissions are replaced as complete records.
+  if (existing !== undefined && existing !== table) return `ID ${id} already belongs to ${existing}`
+  if (earlier !== undefined && earlier !== table) return `ID ${id} is written as two record types`
+  return undefined
+}
+
 /** Enforce global ID ownership: one table per ID, and immutable records are created once. */
-const checkGlobalIds = (state: State, writes: ReadonlyArray<StorageWrite>): void => {
+const checkGlobalIds = (
+  state: State,
+  writes: ReadonlyArray<StorageWrite>,
+): Effect.Effect<void, StorageError> => {
   const claimed = new Map<number, TableName>()
   for (const write of writes) {
     const claim = claimOf(write)
     if (claim === undefined) continue
-    const { table, id } = claim
-    const existing = state.recordTypes.get(id)
-    const earlier = claimed.get(id)
-    if (table === 'conversation' || table === 'entry' || table === 'document') {
-      if (existing !== undefined) throw new Error(`ID ${id} already belongs to ${existing}`)
-      if (earlier !== undefined) throw new Error(`ID ${id} is written more than once`)
-    } else {
-      // Tasks and submissions are replaced as complete records.
-      if (existing !== undefined && existing !== table) {
-        throw new Error(`ID ${id} already belongs to ${existing}`)
-      }
-      if (earlier !== undefined && earlier !== table) {
-        throw new Error(`ID ${id} is written as two record types`)
-      }
-    }
-    claimed.set(id, table)
+    const problem = claimProblem(state, claimed, claim.table, claim.id)
+    if (problem !== undefined) return Effect.fail(new StorageError({ message: problem }))
+    claimed.set(claim.id, claim.table)
   }
+  return Effect.void
 }
 
 const claim = (state: State, id: number, table: TableName): void => {
@@ -124,7 +139,7 @@ const applySubmission = (state: State, value: SubmissionRecord): void => {
   }
 }
 
-const applyRecord = (state: State, write: StorageWrite, seq: Seq): void => {
+const applyRecord = (state: State, write: ResolvedWrite, seq: Seq): void => {
   switch (write.type) {
     case 'conversation':
       applyConversation(state, write.value)
@@ -138,8 +153,6 @@ const applyRecord = (state: State, write: StorageWrite, seq: Seq): void => {
     case 'submission':
       applySubmission(state, write.value)
       break
-    case 'document.copy':
-      throw new Error('Prepared document copy was not resolved')
     case 'document.create':
     case 'document.change':
     case 'document.retire':
@@ -151,16 +164,19 @@ const applyRecord = (state: State, write: StorageWrite, seq: Seq): void => {
  * Atomically persist one batch. Everything that can reject the batch runs before the first state
  * change, so a rejected batch has no effect.
  */
-export const commit = (state: State, writes: ReadonlyArray<StorageWrite>): Seq => {
-  assertOpen(state)
+export const commit = Effect.fnUntraced(function* (
+  state: State,
+  writes: ReadonlyArray<StorageWrite>,
+) {
+  yield* ensureOpen(state)
   const seq = Seq.make(state.nextSeq)
-  const detached = freeze(resolveDocumentCopies(state, structuredClone(writes)))
-  checkGlobalIds(state, detached)
-  const documentActions = prepareDocumentActions(detached)
-  checkDocumentActions(state, documentActions)
+  const detached = freeze(yield* resolveDocumentCopies(state, structuredClone(writes)))
+  yield* checkGlobalIds(state, detached)
+  const documentActions = yield* prepareDocumentActions(detached)
+  yield* checkDocumentActions(state, documentActions)
 
   for (const write of detached) applyRecord(state, write, seq)
   applyDocumentActions(state, documentActions, seq)
   state.nextSeq = seq + 1
   return seq
-}
+})

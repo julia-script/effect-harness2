@@ -1,3 +1,4 @@
+import { Effect } from 'effect'
 import { StorageRequestError } from './schema/index.ts'
 import type { Cursor, ScanOrder } from './schema/index.ts'
 
@@ -10,34 +11,33 @@ export interface ScanStart {
 const isScanOrder = (value: unknown): value is ScanOrder =>
   value === 'ascending' || value === 'descending'
 
+const invalid = (message: string) => Effect.fail(new StorageRequestError({ message }))
+
 /**
  * Resolve a scan's order and position. A cursor continues in the order it was created with,
  * whether the query repeats that order or omits it; a different `order` is rejected. A cursor
- * without an order continues in the scan's default order. Throws `StorageRequestError`.
+ * without an order continues in the scan's default order.
  */
 export const scanStart = (
   requested: ScanOrder | undefined,
   cursor: Cursor | undefined,
   fallback: ScanOrder,
-): ScanStart => {
+): Effect.Effect<ScanStart, StorageRequestError> => {
   if (requested !== undefined && !isScanOrder(requested)) {
-    throw new StorageRequestError({ message: `Invalid scan order: ${String(requested)}` })
+    return invalid(`Invalid scan order: ${String(requested)}`)
   }
-  if (cursor === undefined) return { order: requested ?? fallback, after: undefined }
+  if (cursor === undefined)
+    return Effect.succeed({ order: requested ?? fallback, after: undefined })
   const { after, order: stored } = cursor
   if (typeof after !== 'number' || !Number.isSafeInteger(after)) {
-    throw new StorageRequestError({ message: 'Invalid storage cursor' })
+    return invalid('Invalid storage cursor')
   }
-  if (stored !== undefined && !isScanOrder(stored)) {
-    throw new StorageRequestError({ message: 'Invalid storage cursor' })
-  }
+  if (stored !== undefined && !isScanOrder(stored)) return invalid('Invalid storage cursor')
   const order = stored ?? fallback
   if (requested !== undefined && requested !== order) {
-    throw new StorageRequestError({
-      message: `The cursor continues a ${order} scan; the query asks for ${requested}`,
-    })
+    return invalid(`The cursor continues a ${order} scan; the query asks for ${requested}`)
   }
-  return { order, after }
+  return Effect.succeed({ order, after })
 }
 
 /** The continuation of a scan whose last returned item has `id`. */

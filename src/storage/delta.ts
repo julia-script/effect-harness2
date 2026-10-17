@@ -1,11 +1,14 @@
+import { Effect } from 'effect'
 import type { JsonObject, Op } from './schema/index.ts'
+import { StorageError } from './StorageError.ts'
 
 /**
  * Document delta replay for storage backends, after pi's `chord/delta` applier.
  *
  * Ops are data, so every op is validated before use: unknown verbs, wrong arities, and path
  * segments that reach the prototype chain are rejected, and writes use `defineProperty` so an
- * inherited setter never runs.
+ * inherited setter never runs. The helpers below report a problem as a message; `applyBatches`
+ * turns the first one into a `StorageError`.
  */
 
 type Segment = string | number
@@ -13,6 +16,9 @@ type Path = ReadonlyArray<Segment>
 type Container = unknown[] | Record<string, unknown>
 type ArrayOp = Extract<Op, readonly ['p' | 'm', ...ReadonlyArray<unknown>]>
 type LeafOp = Extract<Op, readonly ['s' | 'd' | 'a' | 't', ...ReadonlyArray<unknown>]>
+type StringOp = Extract<Op, readonly ['a' | 't', ...ReadonlyArray<unknown>]>
+/** Why an op could not be applied; `undefined` when it was. */
+type Problem = string | undefined
 
 interface Shape {
   readonly arity: number
@@ -33,8 +39,7 @@ const isNonNegativeInt = (value: unknown): value is number =>
 export const isJsonObject = (value: unknown): value is JsonObject =>
   isContainer(value) && !Array.isArray(value)
 
-const pathError = (path: Path): Error =>
-  new Error(`Unresolvable document path: ${JSON.stringify(path)}`)
+const unresolvable = (path: Path): string => `Unresolvable document path: ${JSON.stringify(path)}`
 
 const define = (target: Container, key: Segment, value: unknown): void => {
   Object.defineProperty(target, key, {
@@ -45,14 +50,16 @@ const define = (target: Container, key: Segment, value: unknown): void => {
   })
 }
 
-const assertSafePath = (path: unknown, nonEmpty: boolean): void => {
-  if (!Array.isArray(path)) throw new TypeError('Document op path is not an array')
-  if (nonEmpty && path.length === 0) throw new TypeError('Document op path is empty')
-  for (const segment of path) {
-    const safe =
-      typeof segment === 'string' ? !RESERVED_SEGMENTS.has(segment) : isNonNegativeInt(segment)
-    if (!safe) throw new TypeError(`Unsafe document path segment: ${String(segment)}`)
-  }
+const pathProblem = (path: unknown, nonEmpty: boolean): Problem => {
+  if (!Array.isArray(path)) return 'Document op path is not an array'
+  if (nonEmpty && path.length === 0) return 'Document op path is empty'
+  const segments: ReadonlyArray<unknown> = path
+  const unsafe = segments.find((segment) =>
+    typeof segment === 'string' ? RESERVED_SEGMENTS.has(segment) : !isNonNegativeInt(segment),
+  )
+  return unsafe === undefined
+    ? undefined
+    : `Unsafe document path segment: ${JSON.stringify(unsafe)}`
 }
 
 const isPermutation = (value: unknown): boolean => {
@@ -83,65 +90,70 @@ const SHAPES: ReadonlyMap<unknown, Shape> = new Map<string, Shape>([
   ['m', { arity: 3, nonEmptyPath: false, check: (op) => isPermutation(op[2]) }],
 ])
 
-/** Verb, arity, and payload shape of a decoded op; throws for anything else. */
-const assertValidOp = (op: ReadonlyArray<unknown>): void => {
-  const verb = op[0]
-  const shape = SHAPES.get(verb)
+/** Verb, arity, and payload shape of a decoded op. */
+const opProblem = (op: ReadonlyArray<unknown>): Problem => {
+  const verb = String(op[0])
+  const shape = SHAPES.get(op[0])
   // Silently skipping an unknown verb is how a newer producer's op vanishes.
-  if (shape === undefined) throw new TypeError(`Unknown document op verb: ${String(verb)}`)
-  if (op.length !== shape.arity) throw new TypeError(`Document op ${String(verb)} arity`)
-  if (shape.nonEmptyPath !== undefined) assertSafePath(op[1], shape.nonEmptyPath)
-  if (shape.check !== undefined && !shape.check(op)) {
-    throw new TypeError(`Document op ${String(verb)} shape`)
-  }
+  if (shape === undefined) return `Unknown document op verb: ${verb}`
+  if (op.length !== shape.arity) return `Document op ${verb} arity`
+  const path = shape.nonEmptyPath === undefined ? undefined : pathProblem(op[1], shape.nonEmptyPath)
+  if (path !== undefined) return path
+  return shape.check === undefined || shape.check(op) ? undefined : `Document op ${verb} shape`
 }
 
 /** Walk own properties only, so a path never escapes into the prototype chain. */
-const resolve = (root: unknown, path: Path): Container => {
+const resolve = (root: unknown, path: Path): Container | undefined => {
   let node = root
   for (const segment of path) {
-    if (!isContainer(node)) throw pathError(path)
-    if (Array.isArray(node) && typeof segment !== 'number') throw pathError(path)
-    if (!Object.hasOwn(node, segment)) throw pathError(path)
+    if (!isContainer(node) || (Array.isArray(node) && typeof segment !== 'number')) return undefined
+    if (!Object.hasOwn(node, segment)) return undefined
     const child: unknown = Reflect.get(node, segment)
     node = child
   }
-  if (!isContainer(node)) throw pathError(path)
-  return node
+  return isContainer(node) ? node : undefined
 }
 
-const applyArrayOp = (root: unknown, op: ArrayOp): void => {
+const applyArrayOp = (root: unknown, op: ArrayOp): Problem => {
   const target = resolve(root, op[1])
-  if (!Array.isArray(target)) throw pathError(op[1])
+  if (!Array.isArray(target)) return unresolvable(op[1])
   if (op[0] === 'p') {
     target.splice(op[2], op[3], ...structuredClone(op[4]))
-    return
+    return undefined
   }
   const permutation = op[2]
-  if (target.length !== permutation.length) throw pathError(op[1])
+  if (target.length !== permutation.length) return unresolvable(op[1])
   const previous = [...target]
   for (const [index, from] of permutation.entries()) target[index] = previous[from]
+  return undefined
 }
 
-const applyLeafOp = (root: unknown, op: LeafOp): void => {
+const applyStringOp = (parent: Container, key: Segment, op: StringOp): Problem => {
+  const current: unknown = Object.hasOwn(parent, key) ? Reflect.get(parent, key) : undefined
+  if (typeof current !== 'string') return unresolvable(op[1])
+  define(parent, key, op[0] === 'a' ? `${current}${op[2]}` : current.slice(op[2]))
+  return undefined
+}
+
+const applyLeafOp = (root: unknown, op: LeafOp): Problem => {
   const path = op[1]
   const parent = resolve(root, path.slice(0, -1))
   const key = path.at(-1) ?? ''
   // Writing past the end would leave a hole that does not survive a JSON round trip.
-  if (Array.isArray(parent) && (typeof key !== 'number' || key > parent.length)) {
-    throw pathError(path)
-  }
+  const inRange = !Array.isArray(parent) || (typeof key === 'number' && key <= parent.length)
+  if (parent === undefined || !inRange) return unresolvable(path)
   if (op[0] === 's') {
     define(parent, key, structuredClone(op[2]))
-  } else if (op[0] === 'd') {
-    if (!Array.isArray(parent)) Reflect.deleteProperty(parent, key)
-    else if (typeof key === 'number' && key < parent.length) parent.splice(key, 1)
-    else throw pathError(path)
-  } else {
-    const current: unknown = Object.hasOwn(parent, key) ? Reflect.get(parent, key) : undefined
-    if (typeof current !== 'string') throw pathError(path)
-    define(parent, key, op[0] === 'a' ? `${current}${op[2]}` : current.slice(op[2]))
+    return undefined
   }
+  if (op[0] !== 'd') return applyStringOp(parent, key, op)
+  if (!Array.isArray(parent)) {
+    Reflect.deleteProperty(parent, key)
+    return undefined
+  }
+  if (typeof key !== 'number' || key >= parent.length) return unresolvable(path)
+  parent.splice(key, 1)
+  return undefined
 }
 
 const isArrayOp = (op: Op): op is ArrayOp => op[0] === 'p' || op[0] === 'm'
@@ -150,15 +162,22 @@ const isArrayOp = (op: Op): op is ArrayOp => op[0] === 'p' || op[0] === 'm'
  * Replay op batches on a detached copy of `base`. Neither the base nor any op payload is shared
  * with the result, so callers may hand it out without cloning again.
  */
-export const applyBatches = (base: JsonObject, batches: Iterable<ReadonlyArray<Op>>): unknown => {
+export const applyBatches = Effect.fnUntraced(function* (
+  base: JsonObject,
+  batches: Iterable<ReadonlyArray<Op>>,
+) {
   let root: unknown = structuredClone(base)
   for (const ops of batches) {
     for (const op of ops) {
-      assertValidOp(op)
-      if (op[0] === 'r') root = structuredClone(op[1])
-      else if (isArrayOp(op)) applyArrayOp(root, op)
-      else applyLeafOp(root, op)
+      const invalid = opProblem(op)
+      if (invalid !== undefined) return yield* new StorageError({ message: invalid })
+      if (op[0] === 'r') {
+        root = structuredClone(op[1])
+        continue
+      }
+      const problem = isArrayOp(op) ? applyArrayOp(root, op) : applyLeafOp(root, op)
+      if (problem !== undefined) return yield* new StorageError({ message: problem })
     }
   }
   return root
-}
+})

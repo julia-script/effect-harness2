@@ -1,3 +1,4 @@
+import { Effect } from 'effect'
 import type {
   ConversationRecord,
   DocumentAddress,
@@ -89,22 +90,18 @@ export const makeState = (): State => ({
   closed: false,
 })
 
-export const assertOpen = (state: State): State => {
-  if (state.closed) throw new StorageError({ message: 'MemoryStorage is closed' })
-  return state
-}
+/** The state while the store is open; fails once its scope has closed. */
+export const ensureOpen = (state: State): Effect.Effect<State, StorageError> =>
+  Effect.suspend(() =>
+    state.closed
+      ? Effect.fail(new StorageError({ message: 'MemoryStorage is closed' }))
+      : Effect.succeed(state),
+  )
 
 export const freeze = <T>(value: T): T => {
   if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value
   for (const child of Object.values(value)) freeze(child)
   return Object.freeze(value)
-}
-
-/** A value an index guarantees is present; its absence means the state is corrupt. */
-export const required = <V>(map: ReadonlyMap<number, V>, id: number): V => {
-  const value = map.get(id)
-  if (value === undefined) throw new Error(`Storage index references missing record ${id}`)
-  return value
 }
 
 export const getOrCreate = <K, V>(map: Map<K, V>, key: K, create: () => V): V => {

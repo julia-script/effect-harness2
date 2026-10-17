@@ -1,6 +1,17 @@
 import { expect, test } from 'bun:test'
+import { Effect } from 'effect'
 import { applyBatches } from './delta.ts'
-import type { Op } from './schema/index.ts'
+import type { JsonObject, Op } from './schema/index.ts'
+
+const replay = (base: JsonObject, batches: ReadonlyArray<ReadonlyArray<Op>>) =>
+  Effect.runSync(applyBatches(base, batches))
+
+const problem = (base: JsonObject, op: Op) =>
+  Effect.runSync(
+    applyBatches(base, [[op]]).pipe(
+      Effect.match({ onFailure: (error) => error.message, onSuccess: () => 'applied' }),
+    ),
+  )
 
 test('replays every verb on a detached copy of the base', () => {
   const base = { text: 'hello', list: [1, 2, 3], gone: true }
@@ -12,7 +23,7 @@ test('replays every verb on a detached copy of the base', () => {
     ['d', ['gone']],
     ['s', ['added'], { nested: [] }],
   ]
-  expect(applyBatches(base, [ops])).toEqual({
+  expect(replay(base, [ops])).toEqual({
     text: 'world',
     list: [3, 8, 9, 1],
     added: { nested: [] },
@@ -21,15 +32,13 @@ test('replays every verb on a detached copy of the base', () => {
 })
 
 test('only `r` replaces the root, and later batches apply on top of it', () => {
-  expect(applyBatches({ a: 1 }, [[['r', { b: [] }]], [['p', ['b'], 0, 0, ['x']]]])).toEqual({
-    b: ['x'],
-  })
+  expect(replay({ a: 1 }, [[['r', { b: [] }]], [['p', ['b'], 0, 0, ['x']]]])).toEqual({ b: ['x'] })
 })
 
-test('rejects unsafe or unresolvable paths without polluting prototypes', () => {
-  expect(() => applyBatches({}, [[['s', ['__proto__', 'polluted'], true]]])).toThrow('Unsafe')
+test('fails on unsafe or unresolvable paths without polluting prototypes', () => {
+  expect(problem({}, ['s', ['__proto__', 'polluted'], true])).toContain('Unsafe')
   expect(Reflect.get({}, 'polluted')).toBeUndefined()
-  expect(() => applyBatches({}, [[['s', ['missing', 'key'], 1]]])).toThrow('Unresolvable')
-  expect(() => applyBatches({ list: [] }, [[['s', ['list', 5], 1]]])).toThrow('Unresolvable')
-  expect(() => applyBatches({ list: [1] }, [[['m', ['list'], [0, 0]]]])).toThrow('shape')
+  expect(problem({}, ['s', ['missing', 'key'], 1])).toContain('Unresolvable')
+  expect(problem({ list: [] }, ['s', ['list', 5], 1])).toContain('Unresolvable')
+  expect(problem({ list: [1] }, ['m', ['list'], [0, 0]])).toContain('shape')
 })

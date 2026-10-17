@@ -175,3 +175,15 @@ test('fails every operation after its scope closes', () =>
       expect((yield* Effect.flip(storage.mintId(EntryId))).message).toBe('MemoryStorage is closed')
     }),
   ))
+
+test('builds lazy effects that read the state they run against', () =>
+  withStorage((storage) =>
+    Effect.gen(function* () {
+      const read = storage.conversation(ROOT_CONVERSATION_ID)
+      const scan = storage.scanConversations({}, 10)
+      expect(yield* read).toBeUndefined()
+      yield* createRoot(storage)
+      expect(yield* read).toEqual({ id: ROOT_CONVERSATION_ID })
+      expect(ids(yield* scan)).toEqual([ROOT_CONVERSATION_ID])
+    }),
+  ))

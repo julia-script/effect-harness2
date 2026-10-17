@@ -1,3 +1,4 @@
+import { Effect } from 'effect'
 import { nextCursor, scanStart } from '../scan.ts'
 import type { ScanStart } from '../scan.ts'
 import { StorageRequestError } from '../schema/index.ts'
@@ -20,7 +21,7 @@ import type {
   TaskRecord,
 } from '../schema/index.ts'
 import type { HeadMarker } from '../Storage.ts'
-import { isAliveAt, lowerBound, required, scopeKey, upperBound } from './state.ts'
+import { isAliveAt, lowerBound, scopeKey, upperBound } from './state.ts'
 import type { State } from './state.ts'
 
 interface Segment {
@@ -57,14 +58,14 @@ const scanIndex = <T extends { readonly id: number }>(
   ids: ReadonlyArray<number>,
   start: ScanStart,
   limit: number,
-  lookup: (id: number) => T,
+  lookup: (id: number) => T | undefined,
   matches: (value: T) => boolean,
 ): Page<T> => {
   const values: T[] = []
   for (const index of scanIndexes(ids, start)) {
     if (values.length > limit) break
     const value = lookup(ids[index] ?? 0)
-    if (matches(value)) values.push(value)
+    if (value !== undefined && matches(value)) values.push(value)
   }
   return page(values, limit, start.order)
 }
@@ -75,10 +76,12 @@ const forkSegments = (
   conversationId: ConversationId,
   minEntryId: number,
   maxEntryId: number,
-): ReadonlyArray<Segment> => {
+): Effect.Effect<ReadonlyArray<Segment>, StorageRequestError> => {
   let current = state.conversations.get(conversationId)
   if (current === undefined) {
-    throw new StorageRequestError({ message: `Unknown conversation: ${conversationId}` })
+    return Effect.fail(
+      new StorageRequestError({ message: `Unknown conversation: ${conversationId}` }),
+    )
   }
   const segments: Segment[] = []
   let upper = maxEntryId
@@ -89,7 +92,7 @@ const forkSegments = (
     if (upper < minEntryId) break
     current = state.conversations.get(current.parent.conversationId)
   }
-  return segments
+  return Effect.succeed(segments)
 }
 
 /** Visible entries newest first, following the fork chain toward the root. */
@@ -103,7 +106,8 @@ function* visibleDescending(
     for (let index = upperBound(ids, segment.upper) - 1; index >= 0; index--) {
       const id = ids[index] ?? 0
       if (id < minEntryId) break
-      yield required(state.entries, id)
+      const entry = state.entries.get(id)
+      if (entry !== undefined) yield entry
     }
   }
 }
@@ -119,7 +123,8 @@ function* visibleAscending(
     for (let index = lowerBound(ids, minEntryId); index < ids.length; index++) {
       const id = ids[index] ?? 0
       if (id > segment.upper) break
-      yield required(state.entries, id)
+      const entry = state.entries.get(id)
+      if (entry !== undefined) yield entry
     }
   }
 }
@@ -136,43 +141,45 @@ export const visibleEntry = (
   state: State,
   conversationId: ConversationId,
   id: EntryId,
-): StoredEntry | undefined => {
-  const visible = visibleDescending(state, forkSegments(state, conversationId, id, id), id).next()
-  return visible.done === true ? undefined : storedEntry(state, visible.value.id)
-}
+): Effect.Effect<StoredEntry | undefined, StorageRequestError> =>
+  Effect.map(forkSegments(state, conversationId, id, id), (segments) => {
+    const visible = visibleDescending(state, segments, id).next()
+    return visible.done === true ? undefined : storedEntry(state, visible.value.id)
+  })
 
 export const findLatestHeadMarker = (
   state: State,
   conversationId: ConversationId,
   atOrBeforeEntryId?: EntryId,
-): HeadMarker | undefined => {
+): Effect.Effect<HeadMarker | undefined, StorageRequestError> => {
   const maxEntryId = atOrBeforeEntryId ?? Number.POSITIVE_INFINITY
-  let marker: HeadMarker | undefined
-  for (const segment of forkSegments(state, conversationId, Number.NEGATIVE_INFINITY, maxEntryId)) {
-    const ids = state.headEntryIds.get(segment.conversationId) ?? []
-    const id = ids[upperBound(ids, segment.upper) - 1]
-    const entry = id === undefined ? undefined : required(state.entries, id)
-    if (entry?.head !== undefined) {
-      marker = structuredClone({ ...entry, head: entry.head })
-      break
-    }
-  }
-  return marker
+  return Effect.map(
+    forkSegments(state, conversationId, Number.NEGATIVE_INFINITY, maxEntryId),
+    (segments) => {
+      const markers = segments.flatMap((segment) => {
+        const ids = state.headEntryIds.get(segment.conversationId) ?? []
+        const id = ids[upperBound(ids, segment.upper) - 1]
+        const entry = id === undefined ? undefined : state.entries.get(id)
+        return entry?.head === undefined ? [] : [{ ...entry, head: entry.head }]
+      })
+      return structuredClone(markers[0])
+    },
+  )
 }
 
-export const scanEntries = (
+export const scanEntries = Effect.fnUntraced(function* (
   state: State,
   query: EntryQuery,
   limit: number,
   cursor?: Cursor,
-): Page<EntryRecord> => {
-  const { order, after } = scanStart(query.order, cursor, 'descending')
+) {
+  const { order, after } = yield* scanStart(query.order, cursor, 'descending')
   // The cursor narrows the bound on the side the scan moves away from.
   let minEntryId = query.minEntryId ?? Number.NEGATIVE_INFINITY
   let maxEntryId = query.maxEntryId ?? Number.POSITIVE_INFINITY
   if (after !== undefined && order === 'descending') maxEntryId = Math.min(maxEntryId, after - 1)
   if (after !== undefined && order === 'ascending') minEntryId = Math.max(minEntryId, after + 1)
-  const segments = forkSegments(state, query.conversationId, minEntryId, maxEntryId)
+  const segments = yield* forkSegments(state, query.conversationId, minEntryId, maxEntryId)
   const entries =
     order === 'descending'
       ? visibleDescending(state, segments, minEntryId)
@@ -183,28 +190,30 @@ export const scanEntries = (
     if (visible.length > limit) break
   }
   return page(visible, limit, order)
-}
+})
 
 export const scanConversations = (
   state: State,
   query: ConversationQuery,
   limit: number,
   cursor?: Cursor,
-): Page<ConversationRecord> => {
+): Effect.Effect<Page<ConversationRecord>, StorageRequestError> => {
   let ids = state.conversationIds
   if (query.ownerTaskId !== undefined) {
     ids = state.conversationIdsByOwnerTask.get(query.ownerTaskId) ?? []
   } else if (query.ownerConversationId !== undefined) {
     ids = state.conversationIdsByOwnerConversation.get(query.ownerConversationId) ?? []
   }
-  return scanIndex(
-    ids,
-    scanStart(query.order, cursor, 'ascending'),
-    limit,
-    (id) => required(state.conversations, id),
-    (value) =>
-      query.ownerConversationId === undefined ||
-      value.owner?.conversationId === query.ownerConversationId,
+  return Effect.map(scanStart(query.order, cursor, 'ascending'), (start) =>
+    scanIndex(
+      ids,
+      start,
+      limit,
+      (id) => state.conversations.get(id),
+      (value) =>
+        query.ownerConversationId === undefined ||
+        value.owner?.conversationId === query.ownerConversationId,
+    ),
   )
 }
 
@@ -213,17 +222,19 @@ export const scanTasks = (
   query: TaskQuery,
   limit: number,
   cursor?: Cursor,
-): Page<TaskRecord> =>
-  scanIndex(
-    query.status === undefined ? state.taskIds : state.taskIdsByStatus[query.status],
-    scanStart(query.order, cursor, 'ascending'),
-    limit,
-    (id) => required(state.tasks, id),
-    (value) =>
-      (query.conversationId === undefined || value.conversationId === query.conversationId) &&
-      (query.kind === undefined || value.kind === query.kind) &&
-      (query.abortRequested === undefined || value.abortRequested === query.abortRequested) &&
-      (query.background === undefined || value.background === query.background),
+): Effect.Effect<Page<TaskRecord>, StorageRequestError> =>
+  Effect.map(scanStart(query.order, cursor, 'ascending'), (start) =>
+    scanIndex(
+      query.status === undefined ? state.taskIds : state.taskIdsByStatus[query.status],
+      start,
+      limit,
+      (id) => state.tasks.get(id),
+      (value) =>
+        (query.conversationId === undefined || value.conversationId === query.conversationId) &&
+        (query.kind === undefined || value.kind === query.kind) &&
+        (query.abortRequested === undefined || value.abortRequested === query.abortRequested) &&
+        (query.background === undefined || value.background === query.background),
+    ),
   )
 
 export const scanSubmissions = (
@@ -231,13 +242,16 @@ export const scanSubmissions = (
   query: SubmissionQuery,
   limit: number,
   cursor?: Cursor,
-): Page<SubmissionRecord> =>
-  scanIndex(
-    query.status === undefined ? state.submissionIds : state.submissionIdsByStatus[query.status],
-    scanStart(query.order, cursor, 'ascending'),
-    limit,
-    (id) => required(state.submissions, id),
-    (value) => query.conversationId === undefined || value.conversationId === query.conversationId,
+): Effect.Effect<Page<SubmissionRecord>, StorageRequestError> =>
+  Effect.map(scanStart(query.order, cursor, 'ascending'), (start) =>
+    scanIndex(
+      query.status === undefined ? state.submissionIds : state.submissionIdsByStatus[query.status],
+      start,
+      limit,
+      (id) => state.submissions.get(id),
+      (value) =>
+        query.conversationId === undefined || value.conversationId === query.conversationId,
+    ),
   )
 
 /** Document scans run ascending only, so their cursor needs no order. */
@@ -246,12 +260,14 @@ export const scanDocuments = (
   query: DocumentQuery,
   limit: number,
   cursor?: Cursor,
-): Page<DocumentRecord> =>
-  scanIndex(
-    state.documentIdsByScope.get(scopeKey(query.scope)) ?? [],
-    scanStart('ascending', cursor, 'ascending'),
-    limit,
-    (id) => required(state.documents, id).record,
-    (record) =>
-      (query.kind === undefined || record.kind === query.kind) && isAliveAt(record, query.at),
+): Effect.Effect<Page<DocumentRecord>, StorageRequestError> =>
+  Effect.map(scanStart('ascending', cursor, 'ascending'), (start) =>
+    scanIndex(
+      state.documentIdsByScope.get(scopeKey(query.scope)) ?? [],
+      start,
+      limit,
+      (id) => state.documents.get(id)?.record,
+      (record) =>
+        (query.kind === undefined || record.kind === query.kind) && isAliveAt(record, query.at),
+    ),
   )

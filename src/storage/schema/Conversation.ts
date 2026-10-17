@@ -1,5 +1,5 @@
 import { Schema } from 'effect'
-import { ConversationId, EntryId, TaskId } from './ids.ts'
+import { ConversationId, EntryId, TaskId } from './Ids.ts'
 
 /** Immutable identity, history ancestry, and task ownership of a transcript scope. */
 export const ConversationRecord = Schema.Struct({

@@ -1,17 +1,17 @@
 import { Effect } from 'effect'
 import { applyBatches, isJsonObject } from '../delta.ts'
-import { StorageRequestError } from '../schema/index.ts'
+import { StorageRequestError } from '../../StorageError.ts'
 import type {
   DocumentContent,
   DocumentCreate,
   DocumentPoint,
   DocumentRecord,
   Op,
-  Seq,
-  StorageWrite,
   StoredDocument,
-} from '../schema/index.ts'
-import { StorageError } from '../StorageError.ts'
+} from '../../schema/Document.ts'
+import type { Seq } from '../../schema/Ids.ts'
+import type { StorageWrite } from '../../schema/Write.ts'
+import { StorageError } from '../../StorageError.ts'
 import {
   getOrCreate,
   insertMapId,

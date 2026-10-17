@@ -1,26 +1,24 @@
 import { Effect } from 'effect'
 import { nextCursor, scanStart } from '../scan.ts'
 import type { ScanStart } from '../scan.ts'
-import { StorageRequestError } from '../schema/index.ts'
+import { StorageRequestError } from '../../StorageError.ts'
+import type { ConversationRecord } from '../../schema/Conversation.ts'
+import type { DocumentRecord } from '../../schema/Document.ts'
+import type { EntryRecord, StoredEntry } from '../../schema/Entry.ts'
+import type { ConversationId, EntryId } from '../../schema/Ids.ts'
 import type {
-  ConversationId,
   ConversationQuery,
-  ConversationRecord,
   Cursor,
   DocumentQuery,
-  DocumentRecord,
-  EntryId,
   EntryQuery,
-  EntryRecord,
   Page,
   ScanOrder,
-  StoredEntry,
   SubmissionQuery,
-  SubmissionRecord,
   TaskQuery,
-  TaskRecord,
-} from '../schema/index.ts'
-import type { HeadMarker } from '../Storage.ts'
+} from '../../schema/Scan.ts'
+import type { SubmissionRecord } from '../../schema/Submission.ts'
+import type { TaskRecord } from '../../schema/Task.ts'
+import type { HeadMarker } from '../../Storage.ts'
 import { isAliveAt, lowerBound, scopeKey, upperBound } from './state.ts'
 import type { State } from './state.ts'
 

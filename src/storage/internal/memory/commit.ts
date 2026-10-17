@@ -1,12 +1,10 @@
 import { Effect } from 'effect'
-import { Seq } from '../schema/index.ts'
-import type {
-  ConversationRecord,
-  EntryRecord,
-  StorageWrite,
-  SubmissionRecord,
-  TaskRecord,
-} from '../schema/index.ts'
+import { Seq } from '../../schema/Ids.ts'
+import type { ConversationRecord } from '../../schema/Conversation.ts'
+import type { EntryRecord } from '../../schema/Entry.ts'
+import type { SubmissionRecord } from '../../schema/Submission.ts'
+import type { TaskRecord } from '../../schema/Task.ts'
+import type { StorageWrite } from '../../schema/Write.ts'
 import {
   applyDocumentActions,
   checkDocumentActions,
@@ -23,7 +21,7 @@ import {
   removeSorted,
 } from './state.ts'
 import type { State, TableName } from './state.ts'
-import { StorageError } from '../StorageError.ts'
+import { StorageError } from '../../StorageError.ts'
 
 /** The table and ID a write creates or replaces; document changes and retirements claim none. */
 const claimOf = (

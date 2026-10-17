@@ -1,10 +1,10 @@
 import { Schema } from 'effect'
-import { ConversationRecord } from './conversation.ts'
-import { DocumentBase, DocumentContent, DocumentCopySource, DocumentCreate } from './document.ts'
-import { EntryRecord } from './entry.ts'
-import { DocumentId } from './ids.ts'
-import { SubmissionRecord } from './submission.ts'
-import { TaskRecord } from './task.ts'
+import { ConversationRecord } from './Conversation.ts'
+import { DocumentBase, DocumentContent, DocumentCopySource, DocumentCreate } from './Document.ts'
+import { EntryRecord } from './Entry.ts'
+import { DocumentId } from './Ids.ts'
+import { SubmissionRecord } from './Submission.ts'
+import { TaskRecord } from './Task.ts'
 
 /** One record or document mutation in an atomic storage commit. */
 export const StorageWrite = Schema.Union([

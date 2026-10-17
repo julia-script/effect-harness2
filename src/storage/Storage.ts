@@ -1,31 +1,38 @@
-import { Context } from 'effect'
-import type { Effect } from 'effect'
+/**
+ * The `Storage` service: the Session's atomic persistence boundary, and its in-memory layer.
+ */
+import { Context, Layer } from 'effect'
+import type { Effect, Scope } from 'effect'
+import type { StorageRequestError } from './StorageError.ts'
+import type { ConversationRecord } from './schema/Conversation.ts'
+import type {
+  DocumentAddress,
+  DocumentPoint,
+  DocumentRecord,
+  StoredDocument,
+} from './schema/Document.ts'
+import type { EntryRecord, StoredEntry } from './schema/Entry.ts'
 import type {
   ConversationId,
-  ConversationQuery,
-  ConversationRecord,
-  Cursor,
-  DocumentAddress,
   DocumentId,
-  DocumentPoint,
-  DocumentQuery,
-  DocumentRecord,
   EntryId,
-  EntryQuery,
-  EntryRecord,
-  Page,
   Seq,
-  StorageRequestError,
-  StorageWrite,
-  StoredDocument,
-  StoredEntry,
   SubmissionId,
-  SubmissionQuery,
-  SubmissionRecord,
   TaskId,
+} from './schema/Ids.ts'
+import type {
+  ConversationQuery,
+  Cursor,
+  DocumentQuery,
+  EntryQuery,
+  Page,
+  SubmissionQuery,
   TaskQuery,
-  TaskRecord,
-} from './schema/index.ts'
+} from './schema/Scan.ts'
+import type { SubmissionRecord } from './schema/Submission.ts'
+import type { TaskRecord } from './schema/Task.ts'
+import type { StorageWrite } from './schema/Write.ts'
+import * as internal from './internal/memoryStorage.ts'
 import type { StorageError } from './StorageError.ts'
 
 /** Any ID from the Session-global numeric namespace. */
@@ -52,7 +59,7 @@ export type HeadMarker = EntryRecord & { readonly head: EntryId }
  * does not keep) and has no durable effect. Interruption replaces pi's abort context, and closing
  * the Layer's scope replaces `close()`.
  */
-export interface StorageService {
+export interface Service {
   /**
    * Atomically persist one batch and return its sequence. Once it succeeds, later reads observe
    * it; when it fails, none of the batch is applied.
@@ -155,6 +162,15 @@ export interface StorageService {
 }
 
 /** The Session's storage backend. */
-export class Storage extends Context.Service<Storage, StorageService>()(
+export class Storage extends Context.Service<Storage, Service>()(
   'effect-harness/storage/Storage',
 ) {}
+
+/**
+ * Build an empty in-memory store, ported from pi's `storage/memory.ts`. Closing the scope closes
+ * the store: every later operation fails with a `StorageError`.
+ */
+export const makeMemory: Effect.Effect<Service, never, Scope.Scope> = internal.makeMemory
+
+/** A fresh, empty in-memory `Storage` for each build of the layer. */
+export const layerMemory: Layer.Layer<Storage> = Layer.effect(Storage, makeMemory)

@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
-import { StorageRequestError } from './schema/index.ts'
-import type { Cursor, ScanOrder } from './schema/index.ts'
+import { StorageRequestError } from '../StorageError.ts'
+import type { Cursor, ScanOrder } from '../schema/Scan.ts'
 
 /** Where a built-in storage scan starts: its order and the last ID a previous page returned. */
 export interface ScanStart {

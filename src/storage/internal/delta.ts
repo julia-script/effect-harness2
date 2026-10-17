@@ -1,6 +1,7 @@
 import { Effect } from 'effect'
-import type { JsonObject, Op } from './schema/index.ts'
-import { StorageError } from './StorageError.ts'
+import type { Op } from '../schema/Document.ts'
+import type { JsonObject } from '../schema/Json.ts'
+import { StorageError } from '../StorageError.ts'
 
 /**
  * Document delta replay for storage backends, after pi's `chord/delta` applier.

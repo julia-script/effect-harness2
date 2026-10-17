@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test'
 import { Effect } from 'effect'
-import { applyBatches } from './delta.ts'
-import type { JsonObject, Op } from './schema/index.ts'
+import { applyBatches } from '../internal/delta.ts'
+import { Document, Json } from '../schema/index.ts'
 
-const replay = (base: JsonObject, batches: ReadonlyArray<ReadonlyArray<Op>>) =>
+const replay = (base: Json.JsonObject, batches: ReadonlyArray<ReadonlyArray<Document.Op>>) =>
   Effect.runSync(applyBatches(base, batches))
 
-const problem = (base: JsonObject, op: Op) =>
+const problem = (base: Json.JsonObject, op: Document.Op) =>
   Effect.runSync(
     applyBatches(base, [[op]]).pipe(
       Effect.match({ onFailure: (error) => error.message, onSuccess: () => 'applied' }),
@@ -15,7 +15,7 @@ const problem = (base: JsonObject, op: Op) =>
 
 test('replays every verb on a detached copy of the base', () => {
   const base = { text: 'hello', list: [1, 2, 3], gone: true }
-  const ops: ReadonlyArray<Op> = [
+  const ops: ReadonlyArray<Document.Op> = [
     ['a', ['text'], ' world'],
     ['t', ['text'], 6],
     ['p', ['list'], 1, 1, [9, 8]],

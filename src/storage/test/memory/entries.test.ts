@@ -1,27 +1,26 @@
 import { expect, test } from 'bun:test'
 import { Effect, Schema } from 'effect'
-import { ConversationId, Cursor, EntryId, StorageRequestError, TaskId } from '../schema/index.ts'
-import type { ScanOrder } from '../schema/index.ts'
-import type { StorageService } from '../Storage.ts'
-import { createRoot, entryWrite, ids, pendingTask, withStorage } from './test-support.ts'
+import { createRoot, entryWrite, ids, pendingTask, withStorage } from './support.ts'
+import { Storage, StorageError } from '../../index.ts'
+import { Ids, Scan } from '../../schema/index.ts'
 
 /** Root → child forked at `rootFork` → grandchild forked at `childFork`, with excluded entries. */
-const forkChain = (storage: StorageService) =>
+const forkChain = (storage: Storage.Service) =>
   Effect.gen(function* () {
     const rootId = yield* createRoot(storage)
     const [rootFirst, rootFork, rootExcluded] = [
-      yield* storage.mintId(EntryId),
-      yield* storage.mintId(EntryId),
-      yield* storage.mintId(EntryId),
+      yield* storage.mintId(Ids.EntryId),
+      yield* storage.mintId(Ids.EntryId),
+      yield* storage.mintId(Ids.EntryId),
     ]
     const rootSeq = yield* storage.commit([
       entryWrite(rootFirst, rootId),
       entryWrite(rootFork, rootId, 'marker', { head: rootFirst }),
       entryWrite(rootExcluded, rootId),
     ])
-    const childId = yield* storage.mintId(ConversationId)
-    const childFork = yield* storage.mintId(EntryId)
-    const childExcluded = yield* storage.mintId(EntryId)
+    const childId = yield* storage.mintId(Ids.ConversationId)
+    const childFork = yield* storage.mintId(Ids.EntryId)
+    const childExcluded = yield* storage.mintId(Ids.EntryId)
     yield* storage.commit([
       {
         type: 'conversation',
@@ -30,9 +29,9 @@ const forkChain = (storage: StorageService) =>
       entryWrite(childFork, childId, 'note'),
       entryWrite(childExcluded, childId),
     ])
-    const grandchildId = yield* storage.mintId(ConversationId)
-    const head = yield* storage.mintId(EntryId)
-    const tail = yield* storage.mintId(EntryId)
+    const grandchildId = yield* storage.mintId(Ids.ConversationId)
+    const head = yield* storage.mintId(Ids.EntryId)
+    const tail = yield* storage.mintId(Ids.EntryId)
     yield* storage.commit([
       {
         type: 'conversation',
@@ -74,7 +73,7 @@ test('scans deep fork history in either order through every ancestor cap', () =>
       const mismatch = yield* Effect.flip(
         storage.scanEntries({ ...query, order: 'descending' }, 2, up.next),
       )
-      expect(mismatch).toBeInstanceOf(StorageRequestError)
+      expect(mismatch).toBeInstanceOf(StorageError.StorageRequestError)
       expect(mismatch.message).toContain('cursor')
     }),
   ))
@@ -103,7 +102,7 @@ test('finds head markers and visible entries through the fork chain', () =>
         expect((yield* storage.entry(hidden))?.entry.id).toBe(hidden)
       }
       expect(yield* storage.visibleEntry(chain.rootId, chain.head)).toBeUndefined()
-      const unknown = ConversationId.make(999_999)
+      const unknown = Ids.ConversationId.make(999_999)
       const error = yield* Effect.flip(storage.visibleEntry(unknown, chain.rootFirst))
       expect(error.message).toBe('Unknown conversation: 999999')
     }),
@@ -114,14 +113,14 @@ test('indexes entries committed out of ID order and continues a cursor after new
     Effect.gen(function* () {
       const rootId = yield* createRoot(storage)
       yield* storage.commit([
-        entryWrite(EntryId.make(30), rootId),
-        entryWrite(EntryId.make(10), rootId),
-        entryWrite(EntryId.make(20), rootId, 'marker', { head: EntryId.make(10) }),
+        entryWrite(Ids.EntryId.make(30), rootId),
+        entryWrite(Ids.EntryId.make(10), rootId),
+        entryWrite(Ids.EntryId.make(20), rootId, 'marker', { head: Ids.EntryId.make(10) }),
       ])
       const first = yield* storage.scanEntries({ conversationId: rootId }, 2)
       expect(ids(first)).toEqual([30, 20])
-      expect((yield* storage.findLatestHeadMarker(rootId))?.id).toBe(EntryId.make(20))
-      yield* storage.commit([entryWrite(yield* storage.mintId(EntryId), rootId)])
+      expect((yield* storage.findLatestHeadMarker(rootId))?.id).toBe(Ids.EntryId.make(20))
+      yield* storage.commit([entryWrite(yield* storage.mintId(Ids.EntryId), rootId)])
       const second = yield* storage.scanEntries({ conversationId: rootId }, 2, first.next)
       expect(ids(second)).toEqual([10])
       expect(second.next).toBeUndefined()
@@ -132,12 +131,12 @@ test('filters and pages conversations by owner edges', () =>
   withStorage((storage) =>
     Effect.gen(function* () {
       const rootId = yield* createRoot(storage)
-      const other = yield* storage.mintId(ConversationId)
-      const [taskA, taskB] = [yield* storage.mintId(TaskId), yield* storage.mintId(TaskId)]
+      const other = yield* storage.mintId(Ids.ConversationId)
+      const [taskA, taskB] = [yield* storage.mintId(Ids.TaskId), yield* storage.mintId(Ids.TaskId)]
       const [a, b, c] = [
-        yield* storage.mintId(ConversationId),
-        yield* storage.mintId(ConversationId),
-        yield* storage.mintId(ConversationId),
+        yield* storage.mintId(Ids.ConversationId),
+        yield* storage.mintId(Ids.ConversationId),
+        yield* storage.mintId(Ids.ConversationId),
       ]
       yield* storage.commit([
         { type: 'conversation', value: { id: other } },
@@ -153,7 +152,7 @@ test('filters and pages conversations by owner edges', () =>
       ])
       const first = yield* storage.scanConversations({ ownerConversationId: rootId }, 1)
       expect(ids(first)).toEqual([a])
-      const roundTripped = yield* Schema.decodeUnknownEffect(Cursor)(
+      const roundTripped = yield* Schema.decodeUnknownEffect(Scan.Cursor)(
         JSON.parse(JSON.stringify(first.next)),
       )
       expect(
@@ -171,11 +170,11 @@ test('scans tables in either ID order and continues a cursor in its order', () =
       const rootId = yield* createRoot(storage)
       const taskIds: number[] = []
       for (let index = 0; index < 3; index++) {
-        const id = yield* storage.mintId(TaskId)
+        const id = yield* storage.mintId(Ids.TaskId)
         yield* storage.commit([{ type: 'task', value: pendingTask(id, rootId) }])
         taskIds.push(id)
       }
-      const all = (order?: ScanOrder) =>
+      const all = (order?: Scan.ScanOrder) =>
         Effect.gen(function* () {
           let page = yield* storage.scanTasks(order === undefined ? {} : { order }, 2)
           const found = ids(page)

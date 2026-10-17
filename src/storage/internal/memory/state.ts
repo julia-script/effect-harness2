@@ -1,22 +1,18 @@
 import { Effect } from 'effect'
+import type { ConversationRecord } from '../../schema/Conversation.ts'
 import type {
-  ConversationRecord,
   DocumentAddress,
   DocumentContent,
   DocumentCreate,
-  DocumentId,
   DocumentPoint,
   DocumentRecord,
   DocumentScope,
-  EntryRecord,
-  Seq,
-  SubmissionId,
-  SubmissionRecord,
-  SubmissionStatus,
-  TaskRecord,
-  TaskStatus,
-} from '../schema/index.ts'
-import { StorageError } from '../StorageError.ts'
+} from '../../schema/Document.ts'
+import type { EntryRecord } from '../../schema/Entry.ts'
+import type { DocumentId, Seq, SubmissionId } from '../../schema/Ids.ts'
+import type { SubmissionRecord, SubmissionStatus } from '../../schema/Submission.ts'
+import type { TaskRecord, TaskStatus } from '../../schema/Task.ts'
+import { StorageError } from '../../StorageError.ts'
 
 /** The table that owns an ID; every record kind shares one numeric namespace. */
 export type TableName = 'conversation' | 'entry' | 'task' | 'submission' | 'document'

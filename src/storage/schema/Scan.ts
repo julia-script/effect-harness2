@@ -1,9 +1,9 @@
 import { Schema } from 'effect'
-import { DocumentPoint, DocumentScope } from './document.ts'
-import { ConversationId, EntryId, TaskId } from './ids.ts'
-import { JsonObject } from './json.ts'
-import { SubmissionStatus } from './submission.ts'
-import { TaskStatus } from './task.ts'
+import { DocumentPoint, DocumentScope } from './Document.ts'
+import { ConversationId, EntryId, TaskId } from './Ids.ts'
+import { JsonObject } from './Json.ts'
+import { SubmissionStatus } from './Submission.ts'
+import { TaskStatus } from './Task.ts'
 
 /**
  * Backend-owned continuation state that callers only round-trip to the same scan. It carries the

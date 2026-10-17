@@ -1,29 +1,37 @@
 import { expect, test } from 'bun:test'
 import { Effect } from 'effect'
-import { ConversationId, DocumentId, StorageRequestError } from '../schema/index.ts'
-import type { DocumentCreate, JsonObject, Op } from '../schema/index.ts'
-import type { StorageService } from '../Storage.ts'
-import { createRoot, ids, withStorage } from './test-support.ts'
+import { createRoot, ids, withStorage } from './support.ts'
+import { Storage, StorageError } from '../../index.ts'
+import { Document, Ids, Json } from '../../schema/index.ts'
 
-const rewindable = (id: DocumentId, conversationId: ConversationId, kind = 'notes') =>
+const rewindable = (id: Ids.DocumentId, conversationId: Ids.ConversationId, kind = 'notes') =>
   ({
     id,
     kind,
     scope: { kind: 'conversation', conversationId },
     history: 'rewindable',
     fork: 'asOf',
-  }) satisfies DocumentCreate
+  }) satisfies Document.DocumentCreate
 
-const create = (storage: StorageService, record: DocumentCreate, value: JsonObject, version = 1) =>
+const create = (
+  storage: Storage.Service,
+  record: Document.DocumentCreate,
+  value: Json.JsonObject,
+  version = 1,
+) =>
   storage.commit([{ type: 'document.create', record, content: { kind: 'base', version, value } }])
 
-const change = (storage: StorageService, id: DocumentId, ops: ReadonlyArray<Op>, version = 1) =>
-  storage.commit([{ type: 'document.change', id, content: { kind: 'delta', version, ops } }])
+const change = (
+  storage: Storage.Service,
+  id: Ids.DocumentId,
+  ops: ReadonlyArray<Document.Op>,
+  version = 1,
+) => storage.commit([{ type: 'document.change', id, content: { kind: 'delta', version, ops } }])
 
 test('reconstructs rewindable documents at every commit, detached from callers', () =>
   withStorage((storage) =>
     Effect.gen(function* () {
-      const record = rewindable(yield* storage.mintId(DocumentId), yield* createRoot(storage))
+      const record = rewindable(yield* storage.mintId(Ids.DocumentId), yield* createRoot(storage))
       const initial = { items: ['a'], nested: { count: 1 } }
       const createdAt = yield* create(storage, record, initial)
       const appended = ['b']
@@ -73,8 +81,8 @@ test('preserves half-open incarnations when one replaces another at an address',
   withStorage((storage) =>
     Effect.gen(function* () {
       const rootId = yield* createRoot(storage)
-      const first = rewindable(yield* storage.mintId(DocumentId), rootId)
-      const second = { ...first, id: yield* storage.mintId(DocumentId) }
+      const first = rewindable(yield* storage.mintId(Ids.DocumentId), rootId)
+      const second = { ...first, id: yield* storage.mintId(Ids.DocumentId) }
       const createdAt = yield* create(storage, first, { owner: 'first' })
       const replacedAt = yield* storage.commit([
         {
@@ -104,12 +112,12 @@ test('copies stored document bases and rejects sources changed in the same batch
   withStorage((storage) =>
     Effect.gen(function* () {
       const rootId = yield* createRoot(storage)
-      const childId = yield* storage.mintId(ConversationId)
+      const childId = yield* storage.mintId(Ids.ConversationId)
       yield* storage.commit([{ type: 'conversation', value: { id: childId } }])
-      const source = rewindable(yield* storage.mintId(DocumentId), rootId)
+      const source = rewindable(yield* storage.mintId(Ids.DocumentId), rootId)
       const createdAt = yield* create(storage, source, { count: 1 }, 2)
       yield* change(storage, source.id, [['s', ['count'], 2]], 2)
-      const historical = rewindable(yield* storage.mintId(DocumentId), childId)
+      const historical = rewindable(yield* storage.mintId(Ids.DocumentId), childId)
       yield* storage.commit([
         { type: 'document.copy', record: historical, source: { id: source.id, at: createdAt } },
       ])
@@ -119,7 +127,7 @@ test('copies stored document bases and rejects sources changed in the same batch
         deltasSinceBase: 0,
       })
 
-      const conflict = rewindable(yield* storage.mintId(DocumentId), childId, 'other')
+      const conflict = rewindable(yield* storage.mintId(Ids.DocumentId), childId, 'other')
       const error = yield* Effect.flip(
         storage.commit([
           { type: 'document.copy', record: conflict, source: { id: source.id, at: 'current' } },
@@ -143,7 +151,7 @@ test('uses bases for version transitions and keeps current-only documents curren
   withStorage((storage) =>
     Effect.gen(function* () {
       yield* createRoot(storage)
-      const id = yield* storage.mintId(DocumentId)
+      const id = yield* storage.mintId(Ids.DocumentId)
       yield* create(storage, { id, kind: 'settings', scope: { kind: 'session' } }, { count: 1 })
       yield* change(storage, id, [['s', ['count'], 2]])
       const migratedAt = yield* storage.commit([
@@ -154,7 +162,7 @@ test('uses bases for version transitions and keeps current-only documents curren
         value: { count: 3 },
       })
       const historical = yield* Effect.flip(storage.document(id, migratedAt))
-      expect(historical).toBeInstanceOf(StorageRequestError)
+      expect(historical).toBeInstanceOf(StorageError.StorageRequestError)
       expect(historical.message).toBe(`Document ${id} does not retain historical content`)
       const stale = yield* Effect.flip(change(storage, id, [['s', ['count'], 4]]))
       expect(stale.message).toBe(`Document ${id} version transition requires a base`)

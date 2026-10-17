@@ -1,52 +1,55 @@
 import { expect, test } from 'bun:test'
 import { Effect } from 'effect'
-import { DocumentId, EntryId, SubmissionId, TaskId } from '../schema/index.ts'
-import type { ConversationId, DocumentCreate, SubmissionRecord } from '../schema/index.ts'
-import type { StorageService } from '../Storage.ts'
-import { createRoot, entryWrite, ids, pendingTask, withStorage } from './test-support.ts'
+import { createRoot, entryWrite, ids, pendingTask, withStorage } from './support.ts'
+import { Storage } from '../../index.ts'
+import { Document, Ids, Submission } from '../../schema/index.ts'
 
 interface TaskScope {
   readonly kind: 'task'
-  readonly taskId: TaskId
+  readonly taskId: Ids.TaskId
 }
 
 const base = { kind: 'base', version: 1, value: {} } as const
 
 /** Documents at distinct addresses whose keys look like prototype members. */
-const addressRecords = (storage: StorageService, rootId: ConversationId, taskScope: TaskScope) =>
+const addressRecords = (
+  storage: Storage.Service,
+  rootId: Ids.ConversationId,
+  taskScope: TaskScope,
+) =>
   Effect.gen(function* () {
     const session = { kind: 'session' } as const
-    const first: DocumentCreate = {
-      id: yield* storage.mintId(DocumentId),
+    const first: Document.DocumentCreate = {
+      id: yield* storage.mintId(Ids.DocumentId),
       kind: 'cache',
       scope: session,
       key: '__proto__',
     }
-    const second: DocumentCreate = {
+    const second: Document.DocumentCreate = {
       ...first,
-      id: yield* storage.mintId(DocumentId),
+      id: yield* storage.mintId(Ids.DocumentId),
       key: 'constructor',
     }
-    const conversation: DocumentCreate = {
-      id: yield* storage.mintId(DocumentId),
+    const conversation: Document.DocumentCreate = {
+      id: yield* storage.mintId(Ids.DocumentId),
       kind: 'cache',
       scope: { kind: 'conversation', conversationId: rootId },
       history: 'latest',
       fork: 'current',
       key: '__proto__',
     }
-    const singleton: DocumentCreate = {
-      id: yield* storage.mintId(DocumentId),
+    const singleton: Document.DocumentCreate = {
+      id: yield* storage.mintId(Ids.DocumentId),
       kind: 'task.cache',
       scope: taskScope,
     }
-    const member: DocumentCreate = {
+    const member: Document.DocumentCreate = {
       ...singleton,
-      id: yield* storage.mintId(DocumentId),
+      id: yield* storage.mintId(Ids.DocumentId),
       key: 'member',
     }
-    const other: DocumentCreate = {
-      id: yield* storage.mintId(DocumentId),
+    const other: Document.DocumentCreate = {
+      id: yield* storage.mintId(Ids.DocumentId),
       kind: 'task.other',
       scope: taskScope,
     }
@@ -57,7 +60,7 @@ test('indexes logical addresses and exact-scope scans independently', () =>
   withStorage((storage) =>
     Effect.gen(function* () {
       const rootId = yield* createRoot(storage)
-      const taskId = yield* storage.mintId(TaskId)
+      const taskId = yield* storage.mintId(Ids.TaskId)
       const taskScope = { kind: 'task', taskId } as const
       const records = yield* addressRecords(storage, rootId, taskScope)
       const { first, second, conversation, singleton, member } = records
@@ -92,7 +95,7 @@ test('gives create-plus-retire an empty lifetime and rejects a second current in
     Effect.gen(function* () {
       const rootId = yield* createRoot(storage)
       const record = {
-        id: yield* storage.mintId(DocumentId),
+        id: yield* storage.mintId(Ids.DocumentId),
         kind: 'one',
         scope: { kind: 'session' },
       } as const
@@ -101,15 +104,15 @@ test('gives create-plus-retire an empty lifetime and rejects a second current in
         storage.commit([
           {
             type: 'document.create',
-            record: { ...record, id: yield* storage.mintId(DocumentId) },
+            record: { ...record, id: yield* storage.mintId(Ids.DocumentId) },
             content: base,
           },
         ]),
       )
       expect(duplicate.message).toBe('Document address already has a current incarnation')
 
-      const empty: DocumentCreate = {
-        id: yield* storage.mintId(DocumentId),
+      const empty: Document.DocumentCreate = {
+        id: yield* storage.mintId(Ids.DocumentId),
         kind: 'one',
         key: 'empty',
         scope: { kind: 'conversation', conversationId: rootId },
@@ -131,16 +134,16 @@ test('rolls back record tables and secondary indexes when a document command fai
   withStorage((storage) =>
     Effect.gen(function* () {
       const rootId = yield* createRoot(storage)
-      const task = pendingTask(yield* storage.mintId(TaskId), rootId)
-      const submission: SubmissionRecord = {
-        id: yield* storage.mintId(SubmissionId),
+      const task = pendingTask(yield* storage.mintId(Ids.TaskId), rootId)
+      const submission: Submission.SubmissionRecord = {
+        id: yield* storage.mintId(Ids.SubmissionId),
         conversationId: rootId,
         requestId: 'atomic',
         type: 'input',
         status: 'queued',
       }
       const record = {
-        id: yield* storage.mintId(DocumentId),
+        id: yield* storage.mintId(Ids.DocumentId),
         kind: 'atomic',
         scope: { kind: 'session' },
       } as const
@@ -149,7 +152,7 @@ test('rolls back record tables and secondary indexes when a document command fai
         { type: 'submission', value: submission },
         { type: 'document.create', record, content: base },
       ])
-      const entryId = yield* storage.mintId(EntryId)
+      const entryId = yield* storage.mintId(Ids.EntryId)
       yield* Effect.flip(
         storage.commit([
           { type: 'task', value: { ...task, state: { status: 'running', checkpoint: {} } } },
@@ -157,7 +160,7 @@ test('rolls back record tables and secondary indexes when a document command fai
           entryWrite(entryId, rootId, 'transient'),
           {
             type: 'document.create',
-            record: { ...record, id: yield* storage.mintId(DocumentId) },
+            record: { ...record, id: yield* storage.mintId(Ids.DocumentId) },
             content: base,
           },
         ]),

@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
-import { ConversationId, DocumentId, NonNegativeInt, Seq, TaskId, Version } from './ids.ts'
-import { JsonObject } from './json.ts'
+import { ConversationId, DocumentId, NonNegativeInt, Seq, TaskId, Version } from './Ids.ts'
+import { JsonObject } from './Json.ts'
 
 const PathSegment = Schema.Union([Schema.String, Schema.Int])
 const Path = Schema.Array(PathSegment)

@@ -1,14 +1,13 @@
-import { Effect, Layer } from 'effect'
+import { Effect } from 'effect'
 import type { Scope } from 'effect'
 import { commit } from './memory/commit.ts'
 import { materializeDocument } from './memory/documents.ts'
 import * as Reads from './memory/reads.ts'
 import { addressKey, ensureOpen, isAliveAt, makeState } from './memory/state.ts'
 import type { State } from './memory/state.ts'
-import type { DocumentAddress, DocumentPoint, DocumentRecord } from './schema/index.ts'
-import { Storage } from './Storage.ts'
-import type { IdSchema, StorageId, StorageService } from './Storage.ts'
-import { StorageError } from './StorageError.ts'
+import type { DocumentAddress, DocumentPoint, DocumentRecord } from '../schema/Document.ts'
+import type { IdSchema, StorageId, Service } from '../Storage.ts'
+import { StorageError } from '../StorageError.ts'
 
 /**
  * Detached in-memory reference implementation of `Storage`, ported from pi's
@@ -55,9 +54,9 @@ const document = (state: State, id: number, at: DocumentPoint) =>
     stored === undefined ? undefined : { ...stored, record: structuredClone(stored.record) },
   )
 
-const service = (state: State): StorageService => {
+const service = (state: State): Service => {
   const open = ensureOpen(state)
-  return Storage.of({
+  return {
     commit: (writes) => commit(state, writes),
     mintId: (id) => mint(state, id),
     conversation: (id) => Effect.map(open, () => structuredClone(state.conversations.get(id))),
@@ -82,14 +81,14 @@ const service = (state: State): StorageService => {
     document: (id, at) => Effect.andThen(open, () => document(state, id, at)),
     scanDocuments: (query, limit, cursor) =>
       Effect.andThen(open, () => Reads.scanDocuments(state, query, limit, cursor)),
-  })
+  }
 }
 
 /**
  * Build an empty in-memory store. Closing the scope closes the store: every later operation fails
  * with a `StorageError`.
  */
-export const make: Effect.Effect<StorageService, never, Scope.Scope> = Effect.gen(function* () {
+export const makeMemory: Effect.Effect<Service, never, Scope.Scope> = Effect.gen(function* () {
   const state = makeState()
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
@@ -98,6 +97,3 @@ export const make: Effect.Effect<StorageService, never, Scope.Scope> = Effect.ge
   )
   return service(state)
 })
-
-/** A fresh, empty in-memory `Storage` for each build of the layer. */
-export const layer: Layer.Layer<Storage> = Layer.effect(Storage, make)

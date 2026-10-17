@@ -4,7 +4,7 @@ import { Data, Effect, PubSub } from 'effect'
 import type { Document as Stored } from '../../storage/schema/index.ts'
 import type { Json, Write } from '../../storage/schema/index.ts'
 import { Document } from '../index.ts'
-import type { Session } from '../index.ts'
+import type { Session, SessionError } from '../index.ts'
 import { published, runSession } from './support.ts'
 
 type StorageWrite = Write.StorageWrite
@@ -275,7 +275,7 @@ describe('Session document checkpoints', () => {
         )
         // The definition's error type reaches the commit's error channel.
         expectTypeOf<Effect.Error<typeof commit>>().toExtend<
-          Session.CommitError | CheckpointFailed
+          SessionError.CommitError | CheckpointFailed
         >()
         expectTypeOf<CheckpointFailed>().toExtend<Effect.Error<typeof commit>>()
         const error = yield* Effect.flip(commit)

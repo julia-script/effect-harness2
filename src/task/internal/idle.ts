@@ -5,7 +5,7 @@
 import { Deferred, Effect, Exit, Option } from 'effect'
 import type { ConversationId, TaskId } from '../../storage/schema/Ids.ts'
 import type { SchedulerClosed } from '../TaskError.ts'
-import { loadScopes, scheduleReconcile } from './chains.ts'
+import { loadQueued, loadScopes, scheduleReconcile, withdrawInputs } from './chains.ts'
 import { closedError, readsFirst, withAbortMark } from './state.ts'
 import type { State } from './state.ts'
 import { conversationNode, parentOf } from './tree.ts'
@@ -72,7 +72,7 @@ export const waitForIdle = (state: State, conversationId: ConversationId | undef
 
 /**
  * Mark, in one commit, every live non-background task ordinary traversal from the conversation
- * reaches; then wait until the conversation is idle. With `background`, traversal crosses
+ * reaches, and withdraw the queued inputs of every conversation it reaches; then wait until the conversation is idle. With `background`, traversal crosses
  * background boundaries, and the wait also covers every task it reached.
  */
 export const abortConversation = (
@@ -85,6 +85,7 @@ export const abortConversation = (
       state.session.commit((tx) =>
         Effect.gen(function* () {
           yield* loadScopes(state)
+          const queued = yield* loadQueued(state)
           const found: Array<TaskId> = []
           const walk = walkDown(state, conversationNode(conversationId), {
             crossBackground: background,
@@ -96,6 +97,13 @@ export const abortConversation = (
               yield* tx.setTask(withAbortMark(live))
             }
           }
+          const scope = { conversation: conversationId }
+          yield* withdrawInputs(
+            state,
+            tx,
+            queued,
+            (id) => inScope(state, { conversation: id }, scope, background) === true,
+          )
           return found
         }),
       ),

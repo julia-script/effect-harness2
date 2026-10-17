@@ -29,6 +29,10 @@
     "./task": {
       "types": "./dist/task/index.d.ts",
       "default": "./dist/task/index.js"
+    },
+    "./harness": {
+      "types": "./dist/harness/index.d.ts",
+      "default": "./dist/harness/index.js"
     }
   },
   "scripts": {

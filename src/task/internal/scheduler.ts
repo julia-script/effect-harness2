@@ -5,7 +5,7 @@ import { Storage } from '../../storage/Storage.ts'
 import type { TaskId } from '../../storage/schema/Ids.ts'
 import type { TaskRecord } from '../../storage/schema/Task.ts'
 import { Registry } from '../Registry.ts'
-import type { Service } from '../Scheduler.ts'
+import type { Options, Service } from '../Scheduler.ts'
 import { abort } from './abort.ts'
 import { scheduleReconcile } from './chains.ts'
 import { abortConversation, settleIdle, waitForIdle } from './idle.ts'
@@ -14,7 +14,15 @@ import { driveReconcile, driveSweep } from './reconcile.ts'
 import { drive } from './reserve.ts'
 import { kick, makeState, readsFirst, resolveReceipt, seal, track, withState } from './state.ts'
 import type { State } from './state.ts'
-import { failedOutcome, parentOf, setEdge, sweep } from './tree.ts'
+import {
+  cancellationIntent,
+  conversationNode,
+  failedOutcome,
+  known,
+  parentOf,
+  setEdge,
+  sweep,
+} from './tree.ts'
 import { belowCancelled } from './walk.ts'
 import { waitForTask } from './wait.ts'
 
@@ -42,6 +50,7 @@ const reconcileFor = (state: State, previous: TaskRecord | undefined, record: Ta
     record.state.policy === 'failFast' &&
     previous?.state.status !== 'waiting'
   if (failFast) state.failFastChecks.add(record.id)
+  if (marked || upgraded || (holding && cancellationIntent(record))) state.withdrawPending = true
   if (marked || upgraded || holding || failFast) scheduleReconcile(state)
 }
 
@@ -67,6 +76,23 @@ const checkCreated = (state: State, created: ReadonlyArray<TaskRecord>) => {
       !record.abortRequested &&
       belowCancelled(state, parentOf(record))
     ) {
+      state.withdrawPending = true
+      scheduleReconcile(state)
+    }
+  }
+}
+
+/** A queued input below an owner with cancellation intent is withdrawn, even after its cascade. */
+const checkQueued = (state: State, publication: CommitPublication) => {
+  // Without intent nothing withdraws it; a later intent's mark withdraws it then.
+  if (state.intent.size === 0) return
+  for (const change of publication.changes) {
+    if (change.type !== 'submission') continue
+    const { status, type, conversationId } = change.value
+    if (status !== 'queued' || type !== 'input') continue
+    const node = conversationNode(conversationId)
+    if (!known(state, node) || belowCancelled(state, { conversation: conversationId })) {
+      state.withdrawPending = true
       scheduleReconcile(state)
     }
   }
@@ -115,6 +141,7 @@ const observe = (state: State) => (publication: CommitPublication) =>
     }
     checkFailFast(state, failed)
     checkCreated(state, created)
+    checkQueued(state, publication)
     sweep(state)
     if (!publication.changes.some(isTaskChange)) return
     yield* settleIdle(state)
@@ -161,17 +188,19 @@ const recover = (state: State) =>
 /** Seal, then interrupt every invocation and wait for it: close writes no outcome. */
 const close = (state: State) => Effect.andThen(seal(state), Scope.close(state.scope, Exit.void))
 
-export const make = Effect.gen(function* () {
+export const make = Effect.fnUntraced(function* (hooks: Options) {
   const session = yield* Session
   const storage = yield* Storage
   const registry = yield* Registry
   // Invocations and the driver run in a child scope, so close can seal before interrupting them.
   const scope = yield* Scope.fork(yield* Effect.scope)
-  const state = makeState(session, storage, registry, scope)
+  const state = makeState(session, storage, registry, hooks, scope)
   yield* Effect.addFinalizer(() => close(state))
   yield* session.observeCommits(observe(state))
   yield* recover(state)
-  // Derive abort marks a crash left unapplied below cancelled owners, and finalize held outcomes.
+  // Derive abort marks and withdrawals a crash left unapplied below cancelled owners, and finalize
+  // held outcomes.
+  state.withdrawPending = true
   scheduleReconcile(state)
   yield* Effect.forkIn(drive(state), scope)
   yield* Effect.forkIn(driveReconcile(state), scope)

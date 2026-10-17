@@ -1,0 +1,34 @@
+/**
+ * Errors a `Harness` reports.
+ */
+import { Schema } from 'effect'
+import { ConversationId, SubmissionId } from '../storage/schema/Ids.ts'
+
+/** Input with `whenBusy: 'reject'` reached a busy conversation; nothing was written. */
+export class ConversationBusy extends Schema.TaggedError<
+  ConversationBusy,
+  { readonly brand: unique symbol }
+>('effect-harness/harness/HarnessError/ConversationBusy')('ConversationBusy', {
+  message: Schema.String,
+  conversationId: ConversationId,
+}) {}
+
+/**
+ * A submission was refused before anything was written: its input entry's kind is empty or
+ * starts with `pi.`, or its request ID already names a submission of another type.
+ */
+export class InvalidSubmission extends Schema.TaggedError<
+  InvalidSubmission,
+  { readonly brand: unique symbol }
+>('effect-harness/harness/HarnessError/InvalidSubmission')('InvalidSubmission', {
+  message: Schema.String,
+}) {}
+
+/** No submission has this ID. */
+export class SubmissionNotFound extends Schema.TaggedError<
+  SubmissionNotFound,
+  { readonly brand: unique symbol }
+>('effect-harness/harness/HarnessError/SubmissionNotFound')('SubmissionNotFound', {
+  message: Schema.String,
+  submissionId: SubmissionId,
+}) {}

@@ -66,12 +66,12 @@ type Drafted = Tracker.Draft<State>
 type Read = Readonly<State> | undefined
 type StateOf = Effect.Effect<
   Observation.State<State> | undefined,
-  Session.SnapshotError,
+  SessionError.SnapshotError,
   Scope.Scope
 >
 type WatchOf = Effect.Effect<
   Observation.Watch<State> | undefined,
-  Session.SnapshotError,
+  SessionError.SnapshotError,
   Scope.Scope
 >
 

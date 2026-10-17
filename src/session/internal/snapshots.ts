@@ -3,8 +3,7 @@ import { EntryId } from '../../storage/schema/Ids.ts'
 import type { ConversationId } from '../../storage/schema/Ids.ts'
 import type { DocumentAddress } from '../../storage/schema/Document.ts'
 import type { JsonObject } from '../../storage/schema/Json.ts'
-import type { SnapshotError } from '../Session.ts'
-import type { SessionClosed, SessionFailed } from '../SessionError.ts'
+import type { SessionClosed, SessionFailed, SnapshotError } from '../SessionError.ts'
 import type { Cache } from './cache.ts'
 import {
   checkRecordScope,

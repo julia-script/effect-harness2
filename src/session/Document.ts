@@ -14,7 +14,7 @@ import { DocumentCopySource, DocumentRecord, Op } from '../storage/schema/Docume
 import { ConversationId, NonNegativeInt } from '../storage/schema/Ids.ts'
 import type { EntryId, TaskId } from '../storage/schema/Ids.ts'
 import { JsonObject } from '../storage/schema/Json.ts'
-import type { SnapshotError, TxDocumentError } from './Session.ts'
+import type { SnapshotError, TxDocumentError } from './SessionError.ts'
 
 export const SessionSemantics = Schema.Struct({ scope: Schema.Literal('session') })
 export type SessionSemantics = typeof SessionSemantics.Type

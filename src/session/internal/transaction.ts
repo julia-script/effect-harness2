@@ -1,6 +1,8 @@
 import { Effect } from 'effect'
 import { cast } from 'effect/Function'
+import type { ConversationRecord } from '../../storage/schema/Conversation.ts'
 import type { TransactionScope, Tx } from '../Session.ts'
+import type { TxDocumentError } from '../SessionError.ts'
 import type { AnyToken } from './documents.ts'
 import { assemble } from './transaction/assemble.ts'
 import { stageConversation, stageFork, stageRootConversation } from './transaction/conversations.ts'
@@ -27,9 +29,31 @@ export interface Transaction {
 const staged = <A>(state: TxState, collect: (state: TxState) => A) =>
   Effect.flatMap(assertOpen(state), () => Effect.sync(() => collect(state)))
 
+/**
+ * Conversation creation: the record, then the host's writes for it, as one table write. `self` is
+ * the transaction the host's hook receives.
+ */
+const conversationWrites = (
+  state: TxState,
+  self: () => Tx,
+): Pick<Tx, 'createConversation' | 'createRootConversation' | 'forkConversation'> => {
+  const hook = state.host.conversationCreated
+  const created = (staging: Effect.Effect<ConversationRecord, TxDocumentError>) =>
+    write(
+      state,
+      hook === undefined ? staging : Effect.tap(staging, (record) => hook(self(), record)),
+    )
+  return {
+    createConversation: ({ ownership }) => created(stageConversation(state, ownership)),
+    createRootConversation: created(stageRootConversation(state)),
+    forkConversation: (conversationId, at, { ownership }) =>
+      created(stageFork(state, conversationId, at, ownership)),
+  }
+}
+
 const makeTx = (state: TxState): Tx => {
   const { guard, storage } = state.host
-  return {
+  const tx: Tx = {
     conversation: (id) => read(state, 'conversation', guard(storage.conversation(id))),
     entry: (id) =>
       read(
@@ -53,10 +77,7 @@ const makeTx = (state: TxState): Tx => {
       read(state, 'scanTasks', guard(storage.scanTasks(query, limit, cursor))),
     latestHeadMarker: (conversationId) =>
       read(state, 'latestHeadMarker', guard(storage.findLatestHeadMarker(conversationId))),
-    createConversation: ({ ownership }) => write(state, stageConversation(state, ownership)),
-    createRootConversation: write(state, stageRootConversation(state)),
-    forkConversation: (conversationId, at, { ownership }) =>
-      write(state, stageFork(state, conversationId, at, ownership)),
+    ...conversationWrites(state, () => tx),
     appendEntry: (conversationId, draft) =>
       write(state, Records.appendEntry(state, conversationId, draft)),
     createTask: (kind, input, options) =>
@@ -73,6 +94,7 @@ const makeTx = (state: TxState): Tx => {
       retireDoc(state, token, args),
     ),
   }
+  return tx
 }
 
 export const makeTransaction = (host: Host, scope: TransactionScope = {}): Transaction => {

@@ -18,8 +18,7 @@ import type {
   TaskFamilyToken,
   TaskToken,
 } from './Document.ts'
-import type { SnapshotError } from './Session.ts'
-import type { SessionFailed } from './SessionError.ts'
+import type { SessionFailed, SnapshotError } from './SessionError.ts'
 
 /** One committed change of a watched incarnation; a `null` value retires it. */
 export interface Change<T extends JsonObject> {

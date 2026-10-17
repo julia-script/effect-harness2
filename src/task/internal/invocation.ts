@@ -5,10 +5,14 @@ import type { Tx, TxError } from '../../session/Session.ts'
 import type { TaskOutcome, TaskRecord } from '../../storage/schema/Task.ts'
 import type { Snapshot } from '../Registry.ts'
 import type * as Task from '../Task.ts'
+import { loadScopes, scheduleReconcile } from './chains.ts'
 import { canReserve } from './resolve.ts'
 import { makeRuntime } from './runtime.ts'
-import { causeMessage, end, jsonEqual, lookup, report, runTaskCode, withState } from './state.ts'
+import { jsonEqual } from './json.ts'
+import { causeMessage, end, lookup, report, runTaskCode, withState } from './state.ts'
 import type { Erased, Invocation, State } from './state.ts'
+import { parentOf } from './tree.ts'
+import { belowCancelled, hasOwnedLive, overlayOf } from './walk.ts'
 
 /** A reserved invocation, the definition it runs, and the snapshot it was resolved from. */
 export interface Reservation {
@@ -37,9 +41,20 @@ interface Run {
 /** Terminal outcomes the scheduler writes without running task code. */
 export type SchedulerOutcome = Extract<TaskOutcome, { readonly status: 'faulted' | 'orphaned' }>
 
-/** Write an outcome the scheduler decided. */
-export const terminate = (tx: Tx, record: TaskRecord, outcome: SchedulerOutcome) =>
-  tx.setTask(withState(record, { status: 'terminal', outcome }))
+/**
+ * Write an outcome the scheduler decided. While the task's ordinary owned work is live it holds as
+ * `completing` (spec §5.5); otherwise it is terminal.
+ */
+export const terminate = Effect.fnUntraced(function* (
+  state: State,
+  tx: Tx,
+  record: TaskRecord,
+  outcome: SchedulerOutcome,
+) {
+  yield* loadScopes(state)
+  const holds = hasOwnedLive(state, record.id, yield* overlayOf(tx))
+  yield* tx.setTask(withState(record, { status: holds ? 'completing' : 'terminal', outcome }))
+})
 
 const checkpointOf = (record: TaskRecord): Task.Checkpoint =>
   cast('checkpoint' in record.state ? record.state.checkpoint : { phase: '' })
@@ -66,7 +81,8 @@ const step = (
         if (decision === true && current !== undefined) return Option.some(current)
         end(state, invocation)
         if (typeof decision === 'object' && current !== undefined) {
-          yield* terminate(tx, current, { status: 'faulted', error: { message: decision.fault } })
+          const outcome = { status: 'faulted', error: { message: decision.fault } } as const
+          yield* terminate(state, tx, current, outcome)
         }
         return Option.none<TaskRecord>()
       }),
@@ -93,8 +109,13 @@ const decide = Effect.fnUntraced(function* (
   previous: PhaseResult | undefined,
   run: Run,
 ) {
-  // 3. Abort mark: end; a fresh abort invocation runs the abort handler.
+  // 3. Abort mark: end; a fresh abort invocation starts once the task's owned work is gone.
   if (current.abortRequested) return false
+  // An owner's cancellation intent ends it too, before its cascade marks it.
+  if (!current.background && belowCancelled(state, parentOf(current))) {
+    scheduleReconcile(state)
+    return false
+  }
   if (previous === undefined) return true
   // 4. A failed or defective phase.
   if (previous.failure !== undefined) return { fault: causeMessage(previous.failure) }

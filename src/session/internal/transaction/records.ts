@@ -4,6 +4,7 @@ import type { EntryRecord } from '../../../storage/schema/Entry.ts'
 import { EntryId, SubmissionId, TaskId } from '../../../storage/schema/Ids.ts'
 import type { ConversationId } from '../../../storage/schema/Ids.ts'
 import type { SubmissionCreate, SubmissionRecord } from '../../../storage/schema/Submission.ts'
+import type { ConversationRecord } from '../../../storage/schema/Conversation.ts'
 import type { TaskRecord } from '../../../storage/schema/Task.ts'
 import type { EntryDraft, SubmissionSettlement, TaskKind, TaskOptions } from '../../Session.ts'
 import { assertOpen, currentTask, rejected, requireConversation, taskEntry } from './state.ts'
@@ -160,6 +161,9 @@ export const setTask = Effect.fnUntraced(function* (state: TxState, value: TaskR
 })
 
 /** Every task candidate the transaction staged, in staging order. */
+export const stagedConversations = (state: TxState): ReadonlyArray<ConversationRecord> =>
+  state.writes.flatMap((write) => (write.type === 'conversation' ? [write.value] : []))
+
 export const stagedTasks = (state: TxState): ReadonlyArray<TaskRecord> => {
   const records: Array<TaskRecord> = []
   for (const task of state.tasks.values()) {

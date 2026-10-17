@@ -8,6 +8,10 @@ import { InvocationEnded, TaskRejected } from '../TaskError.ts'
 import type { SchedulerClosed } from '../TaskError.ts'
 import { closedError, isTerminal, memoOf, withMemo, withState } from './state.ts'
 import type { Invocation, State } from './state.ts'
+import { abort } from './abort.ts'
+import { loadChain, loadScopes } from './chains.ts'
+import { parentOf } from './tree.ts'
+import { hasOwnedLive, overlayOf } from './walk.ts'
 import { validateWait, waitForTask } from './wait.ts'
 
 type ErasedRuntime = Task.Runtime<Schema.Json, Task.Checkpoint, Schema.Json>
@@ -73,7 +77,21 @@ export const gated = <A, E>(
     ),
   )
 
-/** Replace the running task's state with what it committed; a wait is validated first. */
+/**
+ * Whether ordinary owned work is live below the task, judged on the commit's candidates, so work
+ * the same commit creates below it counts.
+ */
+const holds = Effect.fnUntraced(function* (state: State, tx: Tx, current: TaskRecord) {
+  const overlay = yield* overlayOf(tx)
+  yield* loadScopes(state)
+  for (const record of overlay.tasks.values()) yield* loadChain(state, parentOf(record), overlay)
+  return hasOwnedLive(state, current.id, overlay)
+})
+
+/**
+ * Replace the running task's state with what it committed. A wait is validated first; an outcome
+ * holds as `completing` while ordinary owned work is live.
+ */
 const commitState = Effect.fnUntraced(function* (
   state: State,
   invocation: Invocation,
@@ -82,6 +100,10 @@ const commitState = Effect.fnUntraced(function* (
   next: ErasedNext,
 ) {
   if (next.status === 'waiting') yield* validateWait(state, tx, invocation, next.on, next.policy)
+  if (next.status === 'terminal' && (yield* holds(state, tx, current))) {
+    yield* tx.setTask(withState(current, { status: 'completing', outcome: next.outcome }))
+    return
+  }
   yield* tx.setTask(withState(current, next))
 })
 
@@ -96,6 +118,40 @@ const outcomes = (state: State, invocation: Invocation, ids: ReadonlyArray<TaskR
             : Effect.fail(rejected(invocation, `cannot read task ${id}: it is not terminal`)),
         ),
       ),
+    ),
+  )
+
+/** Abort a task the invocation's task owns, keeping a `restart` mark, and wait for its end. */
+const abortOwned = (state: State, invocation: Invocation, id: TaskRecord['id']) =>
+  live(
+    invocation,
+    Effect.flatMap(
+      state.session.commit(() => state.storage.task(id)),
+      (record): Effect.Effect<void, Task.RuntimeError> => {
+        if (record?.owner !== invocation.taskId) {
+          return Effect.fail(rejected(invocation, `does not own task ${id}`))
+        }
+        if (isTerminal(record)) return Effect.void
+        return Effect.andThen(abort(state, id, true), waitForTask(state, id))
+      },
+    ),
+  )
+
+/** Live tasks the invocation's task owns directly: each is listed under its owner task. */
+const ownedTasks = (state: State, invocation: Invocation) =>
+  live(
+    invocation,
+    state.session.commit(() =>
+      Effect.suspend(() => {
+        // The step that ends the invocation may have run on the line before this.
+        if (invocation.ended) return Effect.fail(endedError(invocation))
+        const owned: Array<TaskRecord> = []
+        for (const node of state.tree.below.get(invocation.taskId) ?? []) {
+          const record = typeof node === 'string' ? undefined : state.live.get(node)
+          if (record?.owner === invocation.taskId) owned.push(record)
+        }
+        return Effect.succeed(owned.toSorted((left, right) => left.id - right.id))
+      }),
     ),
   )
 
@@ -126,6 +182,8 @@ export const makeRuntime = (state: State, invocation: Invocation): ErasedRuntime
       state.session.commit((tx) => tx.task(id)),
     ),
   waitForTask: (id) => live(invocation, waitForTask(state, id)),
+  abortOwned: (id) => abortOwned(state, invocation, id),
+  ownedTasks: ownedTasks(state, invocation),
   outcomes: (ids) => outcomes(state, invocation, ids),
   snapshot: state.session.snapshot,
   snapshotAsOf: state.session.snapshotAsOf,

@@ -23,6 +23,10 @@ export interface Transaction {
   readonly state: TxState
 }
 
+/** What the transaction staged so far; not a read. */
+const staged = <A>(state: TxState, collect: (state: TxState) => A) =>
+  Effect.flatMap(assertOpen(state), () => Effect.sync(() => collect(state)))
+
 const makeTx = (state: TxState): Tx => {
   const { guard, storage } = state.host
   return {
@@ -61,9 +65,8 @@ const makeTx = (state: TxState): Tx => {
     settleSubmission: (id, settlement) => Records.settleSubmission(state, id, settlement),
     placeSubmission: (id, entry) => Records.placeSubmission(state, id, entry),
     setTask: (record) => Records.setTask(state, record),
-    stagedTasks: Effect.flatMap(assertOpen(state), () =>
-      Effect.sync(() => Records.stagedTasks(state)),
-    ),
+    stagedTasks: staged(state, Records.stagedTasks),
+    stagedConversations: staged(state, Records.stagedConversations),
     // Overload resolution ends here: past it, tokens and drafts are untyped JSON.
     doc: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) => doc(state, token, args)),
     retireDoc: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) =>

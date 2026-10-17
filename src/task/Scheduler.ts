@@ -16,18 +16,60 @@
  * changes; aborting it settles it as `orphaned`. Closing the scope interrupts every invocation and
  * writes no outcome, so the work resumes in the next Scheduler.
  *
- * Not ported yet: task ownership (completing holds, abort cascades, `failFast` marks), idle waits,
- * conversation aborts, `abandonOnRestart`, and inspection.
+ * Tasks and conversations form one ownership tree (spec §5.5). A task's outcome holds as
+ * `completing` while its ordinary owned work is live, and its abort handler waits for that work:
+ * aborts run bottom-up. An owner's cancellation intent, its abort mark or a held failed outcome,
+ * abort-marks the live work below it (spec §5.4), and a failed task in a `failFast` wait marks the
+ * others. Background tasks are owned by a conversation but outside its ordinary traversal: no
+ * cascade, idle wait, or conversation abort reaches them or below them. A task created with
+ * `abandonOnRestart` is abort-marked with reason `restart` by the next Scheduler.
+ *
+ * Not ported yet: withdrawing queued inputs below cancelled owners, which comes with the inbox.
  */
-import { Context, Layer } from 'effect'
+import { Context, Layer, Schema } from 'effect'
 import type { Effect, Scope } from 'effect'
 import type { CommitError, Session } from '../session/Session.ts'
 import type { Storage } from '../storage/Storage.ts'
-import type { TaskId } from '../storage/schema/Ids.ts'
+import type { StorageError } from '../storage/StorageError.ts'
+import type { ConversationId } from '../storage/schema/Ids.ts'
+import { TaskId } from '../storage/schema/Ids.ts'
+import { TaskRecord } from '../storage/schema/Task.ts'
 import * as internal from './internal/scheduler.ts'
 import type { Registry } from './Registry.ts'
 import type { TerminalTask } from './Task.ts'
 import type { SchedulerClosed, TaskNotFound } from './TaskError.ts'
+
+/** A live task's scheduling state, derived and never persisted. */
+export const TaskInspectionState = Schema.Union([
+  /** An invocation is active. */
+  Schema.Struct({ kind: Schema.Literal('running') }),
+  /** The next pass reserves it; `migrates` when its definition is newer and has `migrate`. */
+  Schema.Struct({ kind: Schema.Literal('ready'), migrates: Schema.Boolean }),
+  /**
+   * Waits for these live tasks: the live part of its `on`, or, when abort-marked, its live
+   * ordinary owned work, which must end before its abort handler starts.
+   */
+  Schema.Struct({ kind: Schema.Literal('waiting'), on: Schema.Array(TaskId) }),
+  /** Outcome held until its ordinary owned work drains. */
+  Schema.Struct({ kind: Schema.Literal('completing') }),
+  /** No installed definition can take it; aborting it settles it as `orphaned`. */
+  Schema.Struct({
+    kind: Schema.Literal('blocked'),
+    reason: Schema.Literals(['missing_task', 'task_too_old', 'migration_failed']),
+    message: Schema.optionalKey(Schema.String),
+  }),
+])
+export type TaskInspectionState = typeof TaskInspectionState.Type
+
+export const TaskInspection = Schema.Struct({ record: TaskRecord, state: TaskInspectionState })
+export type TaskInspection = typeof TaskInspection.Type
+
+/** Scheduling state and every live task, read on the Session line. */
+export const Inspection = Schema.Struct({
+  scheduling: Schema.Literals(['running', 'closing']),
+  tasks: Schema.Array(TaskInspection),
+})
+export type Inspection = typeof Inspection.Type
 
 export interface Service {
   /**
@@ -35,11 +77,31 @@ export interface Service {
    * handler then runs in a fresh invocation. A task no definition can take is settled as
    * `orphaned` instead. `terminal` when the task had already ended.
    */
-  readonly abort: (id: TaskId) => Effect.Effect<'marked' | 'terminal', TaskNotFound | CommitError>
+  readonly abort: (
+    id: TaskId,
+  ) => Effect.Effect<'marked' | 'terminal', TaskNotFound | CommitError | StorageError>
   /** Wait for the task's terminal receipt. Interrupting the wait leaves the task running. */
   readonly waitForTask: (
     id: TaskId,
   ) => Effect.Effect<TerminalTask, TaskNotFound | SchedulerClosed | CommitError>
+  /**
+   * Wait until ordinary traversal from the conversation, or with none from every ownerless
+   * conversation, reaches no live non-background task.
+   */
+  readonly waitForIdle: (
+    conversationId?: ConversationId,
+  ) => Effect.Effect<void, SchedulerClosed | CommitError>
+  /**
+   * Abort-mark, in one commit, every live non-background task ordinary traversal from the
+   * conversation reaches, then wait until it is idle. With `background`, traversal crosses
+   * background tasks, and the wait also covers every task it reached.
+   */
+  readonly abortConversation: (
+    conversationId: ConversationId,
+    options?: { readonly background?: boolean },
+  ) => Effect.Effect<void, TaskNotFound | SchedulerClosed | CommitError | StorageError>
+  /** Scheduling state and every live task with its derived state. Runs no task code. */
+  readonly inspect: Effect.Effect<Inspection, CommitError | StorageError>
 }
 
 export class Scheduler extends Context.Service<Scheduler, Service>()(

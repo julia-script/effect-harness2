@@ -225,8 +225,9 @@ export interface Tx {
    * retire in the same commit.
    */
   readonly setTask: (record: TaskRecord) => Effect.Effect<TaskRecord, TxError>
-  /** Task records created or replaced so far, as the batch would commit them; not a read. */
+  /** Records created or replaced so far, as the batch would commit them; not reads. */
   readonly stagedTasks: Effect.Effect<ReadonlyArray<TaskRecord>, TxError>
+  readonly stagedConversations: Effect.Effect<ReadonlyArray<ConversationRecord>, TxError>
   readonly doc: Document.Acquire
   readonly retireDoc: Document.Retire
 }

@@ -25,6 +25,10 @@
     "./delta": {
       "types": "./dist/delta/index.d.ts",
       "default": "./dist/delta/index.js"
+    },
+    "./task": {
+      "types": "./dist/task/index.d.ts",
+      "default": "./dist/task/index.js"
     }
   },
   "scripts": {

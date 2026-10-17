@@ -132,7 +132,7 @@ export const SessionEnd = Schema.Union([
 ])
 export type SessionEnd = typeof SessionEnd.Type
 
-/** How a `Tx` operation fails: a rejected operation, or a failed Session. */
+/** How a `Tx` operation fails. */
 export type TxError = TransactionError | SessionFailed
 
 /** How a `Tx` table read fails. */
@@ -185,17 +185,13 @@ export interface Tx {
   readonly latestHeadMarker: (
     conversationId: ConversationId,
   ) => Effect.Effect<(EntryRecord & { readonly head: EntryId }) | undefined, TxReadError>
-
   /** Create a conversation with explicitly selected ownership. */
   readonly createConversation: (options: {
     readonly ownership: ConversationOwnership
   }) => Effect.Effect<ConversationRecord, TxError | StorageRequestError>
   /** Create the root conversation at its reserved ID, as a Harness does once. */
   readonly createRootConversation: Effect.Effect<ConversationRecord, TxError | StorageRequestError>
-  /**
-   * Fork history at one visible entry of `parentConversationId`. The fork copies the parent's
-   * conversation documents: `asOf` ones as of the entry's commit, `current` ones as they are now.
-   */
+  /** Fork history at one visible entry; `asOf` documents copy as of it, `current` ones as now. */
   readonly forkConversation: (
     parentConversationId: ConversationId,
     at: EntryId,
@@ -229,6 +225,8 @@ export interface Tx {
    * retire in the same commit.
    */
   readonly setTask: (record: TaskRecord) => Effect.Effect<TaskRecord, TxError>
+  /** Task records created or replaced so far, as the batch would commit them; not a read. */
+  readonly stagedTasks: Effect.Effect<ReadonlyArray<TaskRecord>, TxError>
   readonly doc: Document.Acquire
   readonly retireDoc: Document.Retire
 }
@@ -255,6 +253,13 @@ export interface Service {
   ) => Effect.Effect<A, E | CommitError, R>
   /** Receive every later commit's publication, in commit order, while the scope is open. */
   readonly subscribe: Effect.Effect<PubSub.Subscription<CommitPublication>, never, Scope.Scope>
+  /**
+   * Run `listener` with every later commit's publication, on the line, while the scope is open:
+   * an index it keeps is exact for whatever runs on the line next. It must not wait for the line.
+   */
+  readonly observeCommits: (
+    listener: (publication: CommitPublication) => Effect.Effect<void>,
+  ) => Effect.Effect<void, never, Scope.Scope>
   /** Succeeds once the Session ended: its scope closed, or Storage failed it. */
   readonly ended: Effect.Effect<SessionEnd>
   readonly snapshot: Document.Snapshot

@@ -82,11 +82,44 @@ const guard =
 
 const closed = new SessionClosed({ message: 'Session is closed' })
 
+/** Commit listeners, run on the line after each publication; see `Service.observeCommits`. */
+type Listeners = Set<(publication: CommitPublication) => Effect.Effect<void>>
+
+/** Run every listener in registration order; a defect in one is logged, and the next still runs. */
+const notify = (listeners: Listeners, published: CommitPublication) =>
+  Effect.forEach(
+    [...listeners],
+    (listener) =>
+      Effect.ignoreCause(
+        Effect.suspend(() => listener(published)),
+        {
+          log: 'Error',
+          message: 'Session commit listener failed',
+        },
+      ),
+    { discard: true },
+  )
+
+/** Register `listener` while the caller's scope is open. */
+const observeCommits =
+  (listeners: Listeners): Service['observeCommits'] =>
+  (listener) =>
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        listeners.add(listener)
+      }),
+      () =>
+        Effect.sync(() => {
+          listeners.delete(listener)
+        }),
+    )
+
 /** Persist an assembled batch, adopt its document changes, and publish it. */
 const persist = (
   host: Host,
   observers: Observers.Observers,
   pubsub: PubSub.PubSub<CommitPublication>,
+  listeners: Listeners,
   transaction: ReturnType<typeof makeTransaction>,
   assembly: Effect.Success<ReturnType<typeof settle>>,
 ) =>
@@ -99,7 +132,9 @@ const persist = (
         const documents = yield* adopt(host.cache, assembly.plans, seq)
         for (const { record } of documents) yield* host.cache.touch(addressId(record))
         yield* observers.publish(documents)
-        yield* PubSub.publish(pubsub, publication(assembly, documents, seq))
+        const published = publication(assembly, documents, seq)
+        yield* PubSub.publish(pubsub, published)
+        yield* notify(listeners, published)
       }),
   )
 
@@ -108,6 +143,7 @@ const runCommit = Effect.fnUntraced(function* <A, E, R>(
   host: Host,
   observers: Observers.Observers,
   pubsub: PubSub.PubSub<CommitPublication>,
+  listeners: Listeners,
   change: (tx: Tx) => Effect.Effect<A, E, R>,
   scope: TransactionScope | undefined,
 ) {
@@ -126,7 +162,7 @@ const runCommit = Effect.fnUntraced(function* <A, E, R>(
     return result
   }
   // Once admitted, interruption waits for Storage to settle and the commit to publish.
-  yield* Effect.uninterruptible(persist(host, observers, pubsub, transaction, assembly))
+  yield* Effect.uninterruptible(persist(host, observers, pubsub, listeners, transaction, assembly))
   return result
 })
 
@@ -196,6 +232,7 @@ export const make = (options: Options): Effect.Effect<Service, never, Storage | 
     const storage: StorageService = yield* Storage
     const line = yield* Semaphore.make(1)
     const pubsub = yield* PubSub.unbounded<CommitPublication>()
+    const listeners: Listeners = new Set()
     const lifecycle: Lifecycle = {
       failure: yield* Deferred.make<never, SessionFailed>(),
       closing: yield* Deferred.make<void>(),
@@ -223,8 +260,9 @@ export const make = (options: Options): Effect.Effect<Service, never, Storage | 
       )
     const service: Service = {
       commit: (change, transactionScope) =>
-        onLine(runCommit(lifecycle, host, observers, pubsub, change, transactionScope)),
+        onLine(runCommit(lifecycle, host, observers, pubsub, listeners, change, transactionScope)),
       subscribe: PubSub.subscribe(pubsub),
+      observeCommits: observeCommits(listeners),
       ended: Deferred.await(lifecycle.ended),
       ...documentReads(host, observers, usable, onLine),
       unloadDocuments: onLine(cache.clear),

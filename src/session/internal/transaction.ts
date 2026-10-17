@@ -6,7 +6,7 @@ import { assemble } from './transaction/assemble.ts'
 import { stageConversation, stageFork, stageRootConversation } from './transaction/conversations.ts'
 import { abortChanges, doc, prepareChanges, retireDoc } from './transaction/documents.ts'
 import * as Records from './transaction/records.ts'
-import { committedTask, makeState, read, rejected, write } from './transaction/state.ts'
+import { assertOpen, committedTask, makeState, read, rejected, write } from './transaction/state.ts'
 import type { Host, TxState } from './transaction/state.ts'
 
 /**
@@ -61,6 +61,9 @@ const makeTx = (state: TxState): Tx => {
     settleSubmission: (id, settlement) => Records.settleSubmission(state, id, settlement),
     placeSubmission: (id, entry) => Records.placeSubmission(state, id, entry),
     setTask: (record) => Records.setTask(state, record),
+    stagedTasks: Effect.flatMap(assertOpen(state), () =>
+      Effect.sync(() => Records.stagedTasks(state)),
+    ),
     // Overload resolution ends here: past it, tokens and drafts are untyped JSON.
     doc: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) => doc(state, token, args)),
     retireDoc: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) =>

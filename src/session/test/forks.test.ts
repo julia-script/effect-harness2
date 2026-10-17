@@ -93,7 +93,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ value: 'as-initial' }),
+          initial: () => Effect.succeed({ value: 'as-initial' }),
         })
         const Current = Document.make<{ value: string }>({
           kind: 'fork.policies.current',
@@ -101,7 +101,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'latest',
           fork: 'current',
-          initial: () => ({ value: 'current-initial' }),
+          initial: () => Effect.succeed({ value: 'current-initial' }),
         })
         const Initial = Document.make<{ value: string }>({
           kind: 'fork.policies.initial',
@@ -109,7 +109,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'latest',
           fork: 'initial',
-          initial: () => ({ value: 'fresh' }),
+          initial: () => Effect.succeed({ value: 'fresh' }),
         })
         const AsOfFamily = Document.makeFamily<{ value: string }, string>({
           kind: 'fork.policies.as-of-family',
@@ -118,7 +118,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: (seed) => ({ value: seed }),
+          initial: (seed) => Effect.succeed({ value: seed }),
         })
         const CurrentFamily = Document.makeFamily<{ value: string }, string>({
           kind: 'fork.policies.current-family',
@@ -127,7 +127,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'latest',
           fork: 'current',
-          initial: (seed) => ({ value: seed }),
+          initial: (seed) => Effect.succeed({ value: seed }),
         })
         const parentId = yield* createConversation(session)
         const forkAt = yield* session.commit((tx) =>
@@ -222,7 +222,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ value: 'initial' }),
+          initial: () => Effect.succeed({ value: 'initial' }),
         })
         const parentId = yield* createConversation(session)
         const { forkAt, excluded } = yield* session.commit((tx) =>
@@ -254,7 +254,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ value: 'initial' }),
+          initial: () => Effect.succeed({ value: 'initial' }),
         })
         const Current = Document.make<{ value: string }>({
           kind: 'fork.ancestry.current',
@@ -262,7 +262,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'latest',
           fork: 'current',
-          initial: () => ({ value: 'initial' }),
+          initial: () => Effect.succeed({ value: 'initial' }),
         })
         const rootId = yield* createConversation(session)
         const inherited = yield* session.commit((tx) =>
@@ -314,7 +314,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ count: 1 }),
+          initial: () => Effect.succeed({ count: 1 }),
         })
         let migrations = 0
         const V3 = Document.make<{ count: number; migrated: boolean }>({
@@ -323,15 +323,16 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ count: 0, migrated: false }),
-          migrate: (value, fromVersion) => {
-            expect(fromVersion).toBe(1)
-            migrations++
-            return {
-              count: typeof value['count'] === 'number' ? value['count'] : 0,
-              migrated: true,
-            }
-          },
+          initial: () => Effect.succeed({ count: 0, migrated: false }),
+          migrate: (value, fromVersion) =>
+            Effect.sync(() => {
+              expect(fromVersion).toBe(1)
+              migrations++
+              return {
+                count: typeof value['count'] === 'number' ? value['count'] : 0,
+                migrated: true,
+              }
+            }),
         })
         const parentId = yield* createConversation(session)
         const forkAt = yield* session.commit((tx) =>
@@ -371,7 +372,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ count: 2 }),
+          initial: () => Effect.succeed({ count: 2 }),
         })
         let checkpoints = 0
         const V2 = Document.make<{ count: number; migrated: boolean }>({
@@ -380,15 +381,17 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ count: 0, migrated: false }),
-          migrate: (value) => ({
-            count: typeof value['count'] === 'number' ? value['count'] : 0,
-            migrated: true,
-          }),
-          checkpointWhen: () => {
-            checkpoints++
-            return false
-          },
+          initial: () => Effect.succeed({ count: 0, migrated: false }),
+          migrate: (value) =>
+            Effect.succeed({
+              count: typeof value['count'] === 'number' ? value['count'] : 0,
+              migrated: true,
+            }),
+          checkpointWhen: () =>
+            Effect.sync(() => {
+              checkpoints++
+              return false
+            }),
         })
         const parentId = yield* createConversation(session)
         const forkAt = yield* session.commit((tx) =>
@@ -440,7 +443,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ value: 'initial' }),
+          initial: () => Effect.succeed({ value: 'initial' }),
         })
         const parentId = yield* createConversation(session)
         const oldAt = yield* session.commit((tx) =>
@@ -524,7 +527,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ value: 'as-of' }),
+          initial: () => Effect.succeed({ value: 'as-of' }),
         })
         const Current = Document.make<{ value: string }>({
           kind: 'fork.duplicate-policy',
@@ -532,7 +535,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'latest',
           fork: 'current',
-          initial: () => ({ value: 'current' }),
+          initial: () => Effect.succeed({ value: 'current' }),
         })
         const parentId = yield* createConversation(session)
         const oldAt = yield* session.commit((tx) =>
@@ -565,7 +568,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'latest',
           fork: 'current',
-          initial: () => ({ value: 'committed' }),
+          initial: () => Effect.succeed({ value: 'committed' }),
         })
         const AsOf = Document.make<{ value: string }>({
           kind: 'fork.same-transaction-as-of',
@@ -573,7 +576,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ value: 'committed' }),
+          initial: () => Effect.succeed({ value: 'committed' }),
         })
         const parentId = yield* createConversation(session)
         const forkAt = yield* session.commit((tx) =>
@@ -625,13 +628,13 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ value: 'copied' }),
+          initial: () => Effect.succeed({ value: 'copied' }),
         })
         const Failure = Document.make<{ count: number }>({
           kind: 'fork.rollback.failure',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 0 }),
+          initial: () => Effect.succeed({ count: 0 }),
         })
         const parentId = yield* createConversation(session)
         const forkAt = yield* session.commit((tx) =>
@@ -682,7 +685,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ value: 'source' }),
+          initial: () => Effect.succeed({ value: 'source' }),
         })
         const parentId = yield* createConversation(session)
         const forkAt = yield* session.commit((tx) =>
@@ -724,7 +727,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ value: 'fresh' }),
+          initial: () => Effect.succeed({ value: 'fresh' }),
         })
         const parentId = yield* createConversation(session)
         const forkAt = yield* session.commit((tx) =>
@@ -759,19 +762,19 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'latest',
           fork: 'current',
-          initial: () => ({ value: 'conversation' }),
+          initial: () => Effect.succeed({ value: 'conversation' }),
         })
         const SessionOnly = Document.make<{ value: string }>({
           kind: 'fork.scope.session',
           version: 1,
           scope: 'session',
-          initial: () => ({ value: 'session' }),
+          initial: () => Effect.succeed({ value: 'session' }),
         })
         const TaskOnly = Document.make<{ value: string }>({
           kind: 'fork.scope.task',
           version: 1,
           scope: 'task',
-          initial: () => ({ value: 'task' }),
+          initial: () => Effect.succeed({ value: 'task' }),
         })
         const parentId = yield* createConversation(session)
         const { forkAt, taskId } = yield* session.commit((tx) =>
@@ -812,7 +815,7 @@ describe('Session conversation document forks', () => {
           scope: 'conversation',
           history: 'latest',
           fork: 'current',
-          initial: (seed) => ({ value: seed }),
+          initial: (seed) => Effect.succeed({ value: seed }),
         })
         const parentId = yield* createConversation(session)
         const forkAt = yield* appendEntry(session, parentId, 'point')

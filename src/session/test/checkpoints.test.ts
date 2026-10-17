@@ -1,6 +1,6 @@
 /* oxlint-disable max-lines, max-lines-per-function -- ported describe blocks */
-import { describe, expect, test } from 'bun:test'
-import { Cause, Effect, Exit, PubSub } from 'effect'
+import { describe, expect, expectTypeOf, test } from 'bun:test'
+import { Data, Effect, PubSub } from 'effect'
 import type { Document as Stored } from '../../storage/schema/index.ts'
 import type { Json, Write } from '../../storage/schema/index.ts'
 import { Document } from '../index.ts'
@@ -31,9 +31,8 @@ const changeKinds = (commits: ReadonlyArray<ReadonlyArray<StorageWrite>>) =>
     writes.flatMap((write) => (write.type === 'document.change' ? [write.content.kind] : [])),
   )
 
-/** The defect a failed exit died with. */
-const defectOf = <A, E>(exit: Exit.Exit<A, E>): unknown =>
-  Exit.isFailure(exit) && Cause.hasDies(exit.cause) ? Cause.squash(exit.cause) : undefined
+/** A checkpoint predicate's own typed failure. */
+class CheckpointFailed extends Data.TaggedError('CheckpointFailed')<{ readonly message: string }> {}
 
 interface Call {
   readonly value: Readonly<Json.JsonObject>
@@ -48,9 +47,9 @@ describe('Session document checkpoints', () => {
           kind: 'checkpoint.receiver',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 0 }),
+          initial: () => Effect.succeed({ count: 0 }),
           checkpointWhen(value) {
-            return value.count === this.initial().count + 2
+            return Effect.map(this.initial(), (initial) => value.count === initial.count + 2)
           },
         })
         for (let count = 0; count <= 2; count++) {
@@ -73,27 +72,29 @@ describe('Session document checkpoints', () => {
           kind: 'checkpoint.base',
           version: 1,
           scope: 'session',
-          initial: () => ({ items: [] }),
-          checkpointWhen: (value, ops) => {
-            calls.push({ value, ops })
-            return true
-          },
+          initial: () => Effect.succeed({ items: [] }),
+          checkpointWhen: (value, ops) =>
+            Effect.sync(() => {
+              calls.push({ value, ops })
+              return true
+            }),
         })
         const DeltaDoc = Document.make<{ count: number }>({
           kind: 'checkpoint.delta',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 0 }),
-          checkpointWhen: (value, ops) => {
-            falseCalls.push({ value, ops })
-            return false
-          },
+          initial: () => Effect.succeed({ count: 0 }),
+          checkpointWhen: (value, ops) =>
+            Effect.sync(() => {
+              falseCalls.push({ value, ops })
+              return false
+            }),
         })
         const DefaultDoc = Document.make<{ count: number }>({
           kind: 'checkpoint.default',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 0 }),
+          initial: () => Effect.succeed({ count: 0 }),
         })
 
         yield* session.commit((tx) =>
@@ -145,22 +146,24 @@ describe('Session document checkpoints', () => {
           kind: 'checkpoint.deltas-since-base',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 0 }),
-          checkpointWhen: (_value, _ops, info) => {
-            seen.push(info.deltasSinceBase)
-            return info.deltasSinceBase >= 2
-          },
+          initial: () => Effect.succeed({ count: 0 }),
+          checkpointWhen: (_value, _ops, info) =>
+            Effect.sync(() => {
+              seen.push(info.deltasSinceBase)
+              return info.deltasSinceBase >= 2
+            }),
         })
         const V2 = Document.make<{ count: number }>({
           kind: 'checkpoint.deltas-since-base',
           version: 2,
           scope: 'session',
-          initial: () => ({ count: 0 }),
-          migrate: (value) => ({ count: Number(value.count) }),
-          checkpointWhen: (_value, _ops, info) => {
-            seen.push(info.deltasSinceBase)
-            return false
-          },
+          initial: () => Effect.succeed({ count: 0 }),
+          migrate: (value) => Effect.succeed({ count: Number(value.count) }),
+          checkpointWhen: (_value, _ops, info) =>
+            Effect.sync(() => {
+              seen.push(info.deltasSinceBase)
+              return false
+            }),
         })
         const increment = (token: typeof V1) =>
           session.commit((tx) =>
@@ -199,11 +202,12 @@ describe('Session document checkpoints', () => {
           kind: 'checkpoint.no-op',
           version: 1,
           scope: 'session',
-          initial: () => ({ items: ['a', 'b'] }),
-          checkpointWhen: () => {
-            calls++
-            return false
-          },
+          initial: () => Effect.succeed({ items: ['a', 'b'] }),
+          checkpointWhen: () =>
+            Effect.sync(() => {
+              calls++
+              return false
+            }),
         })
         yield* session.commit((tx) => tx.doc(Doc))
         const commits = recorder.commits.length
@@ -231,30 +235,31 @@ describe('Session document checkpoints', () => {
       }),
     ))
 
-  test('rolls back every prepared document when a checkpoint predicate throws', () =>
+  test('rolls back every prepared document when a checkpoint predicate fails', () =>
     runSession(({ session, recorder }) =>
       Effect.gen(function* () {
-        let throwCheckpoint = true
+        let failCheckpoint = true
         let firstCalls = 0
         const First = Document.make<{ count: number }>({
           kind: 'checkpoint.rollback.first',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 0 }),
-          checkpointWhen: () => {
-            firstCalls++
-            return false
-          },
+          initial: () => Effect.succeed({ count: 0 }),
+          checkpointWhen: () =>
+            Effect.sync(() => {
+              firstCalls++
+              return false
+            }),
         })
-        const Second = Document.make<{ count: number }>({
+        const Second = Document.make<{ count: number }, CheckpointFailed>({
           kind: 'checkpoint.rollback.second',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 0 }),
-          checkpointWhen: () => {
-            if (throwCheckpoint) throw new Error('checkpoint failed')
-            return false
-          },
+          initial: () => Effect.succeed({ count: 0 }),
+          checkpointWhen: () =>
+            failCheckpoint
+              ? Effect.fail(new CheckpointFailed({ message: 'checkpoint failed' }))
+              : Effect.succeed(false),
         })
         yield* session.commit((tx) => Effect.all([tx.doc(First), tx.doc(Second)]))
         const first = yield* session.snapshot(First)
@@ -262,24 +267,27 @@ describe('Session document checkpoints', () => {
         const commits = recorder.commits.length
         const subscription = yield* session.subscribe
 
-        const exit = yield* Effect.exit(
-          session.commit((tx) =>
-            Effect.gen(function* () {
-              ;(yield* tx.doc(First)).count = 1
-              ;(yield* tx.doc(Second)).count = 2
-            }),
-          ),
+        const commit = session.commit((tx) =>
+          Effect.gen(function* () {
+            ;(yield* tx.doc(First)).count = 1
+            ;(yield* tx.doc(Second)).count = 2
+          }),
         )
-        const defect = defectOf(exit)
-        expect(defect).toBeInstanceOf(Error)
-        expect(defect instanceof Error ? defect.message : undefined).toBe('checkpoint failed')
+        // The definition's error type reaches the commit's error channel.
+        expectTypeOf<Effect.Error<typeof commit>>().toExtend<
+          Session.CommitError | CheckpointFailed
+        >()
+        expectTypeOf<CheckpointFailed>().toExtend<Effect.Error<typeof commit>>()
+        const error = yield* Effect.flip(commit)
+        expect(error).toBeInstanceOf(CheckpointFailed)
+        expect(error.message).toBe('checkpoint failed')
         expect(firstCalls).toBe(1)
         expect(recorder.commits).toHaveLength(commits)
         expect(yield* PubSub.remaining(subscription)).toBe(0)
         expect(yield* session.snapshot(First)).toBe(first)
         expect(yield* session.snapshot(Second)).toBe(second)
 
-        throwCheckpoint = false
+        failCheckpoint = false
         yield* session.commit((tx) =>
           Effect.gen(function* () {
             ;(yield* tx.doc(First)).count = 3
@@ -299,11 +307,12 @@ describe('Session document checkpoints', () => {
           kind: 'checkpoint.tail',
           version: 1,
           scope: 'session',
-          initial: () => ({ values: [] }),
-          checkpointWhen: () => {
-            calls++
-            return false
-          },
+          initial: () => Effect.succeed({ values: [] }),
+          checkpointWhen: () =>
+            Effect.sync(() => {
+              calls++
+              return false
+            }),
         })
         yield* session.commit((tx) => tx.doc(Doc))
         for (let value = 1; value <= 8; value++) {
@@ -331,8 +340,8 @@ describe('Session document checkpoints', () => {
           kind: 'checkpoint.root-replacement',
           version: 1,
           scope: 'session',
-          initial: () => initial,
-          checkpointWhen: () => false,
+          initial: () => Effect.succeed(initial),
+          checkpointWhen: () => Effect.succeed(false),
         })
         yield* session.commit((tx) => tx.doc(Doc))
         yield* session.commit((tx) =>
@@ -361,11 +370,12 @@ describe('Session document checkpoints', () => {
           kind: 'checkpoint.retire',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 0 }),
-          checkpointWhen: () => {
-            calls++
-            return true
-          },
+          initial: () => Effect.succeed({ count: 0 }),
+          checkpointWhen: () =>
+            Effect.sync(() => {
+              calls++
+              return true
+            }),
         })
         yield* session.commit((tx) => tx.doc(Doc))
         yield* session.commit((tx) =>

@@ -169,15 +169,19 @@ export const resolvePublicationOwners = (state: TxState, plans: ReadonlyArray<Pl
   )
 
 /** Checkpoint predicates run last, after every validation: a true one turns a delta into a base. */
-export const checkpoint = (plan: Plan) => {
+export const checkpoint = (plan: Plan): Effect.Effect<void> => {
   const { content, change } = plan
-  if (content?.type !== 'document.change' || content.content.kind !== 'delta') return
-  if (change?.loaded === undefined || change.definition?.checkpointWhen === undefined) return
-  const { prepared, version, definition, loaded } = change
+  if (content?.type !== 'document.change' || content.content.kind !== 'delta') return Effect.void
+  const definition = change?.definition
+  if (change?.loaded === undefined || definition?.checkpointWhen === undefined) return Effect.void
+  const { prepared, version, loaded } = change
   const info = { deltasSinceBase: loaded.deltasSinceBase }
-  if (definition.checkpointWhen?.(prepared.value, prepared.ops, info) === true) {
-    plan.content = { ...content, content: { version, kind: 'base', value: prepared.value } }
-  }
+  return Effect.flatMap(definition.checkpointWhen(prepared.value, prepared.ops, info), (base) =>
+    Effect.sync(() => {
+      if (base)
+        plan.content = { ...content, content: { version, kind: 'base', value: prepared.value } }
+    }),
+  )
 }
 
 /** The adopted record of a plan committed as `seq`. */

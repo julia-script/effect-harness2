@@ -95,7 +95,7 @@ export const assemble = Effect.fnUntraced(function* (state: TxState) {
     if (task.write !== undefined) writes.push({ type: 'task', value: task.write.record })
   }
   for (const plan of plans) {
-    checkpoint(plan)
+    yield* checkpoint(plan)
     if (plan.content !== undefined) writes.push(plan.content)
     if (plan.retire) writes.push({ type: 'document.retire', id: plan.record.id })
   }

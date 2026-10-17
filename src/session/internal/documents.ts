@@ -20,19 +20,22 @@ import { DocumentError } from '../SessionError.ts'
  * version must be the definition's or an older one it can migrate.
  */
 
-/** A singleton or family definition with its value type erased. */
+/**
+ * A singleton or family definition with its value type erased, and its callbacks' error type:
+ * their failures pass through the Session untouched, and the public overloads type them again.
+ */
 export type AnyDefinition = Semantics & {
   readonly kind: string
   readonly version: number
   readonly family?: true
   // Methods, so that a typed definition's narrower parameters still fit.
-  initial(seed?: Schema.Json): JsonObject
-  migrate?(value: JsonObject, fromVersion: number): JsonObject
+  initial(seed?: Schema.Json): Effect.Effect<JsonObject>
+  migrate?(value: JsonObject, fromVersion: number): Effect.Effect<JsonObject>
   checkpointWhen?(
     value: Readonly<JsonObject>,
     ops: ReadonlyArray<Op>,
     info: CheckpointInfo,
-  ): boolean
+  ): Effect.Effect<boolean>
 }
 
 /** A singleton or family token with its value type erased. */
@@ -179,7 +182,7 @@ export const materializeValue = Effect.fnUntraced(function* (
   yield* checkRecordVersion(definition, record, version)
   if (version === definition.version || definition.migrate === undefined) return value
   return yield* ownedObject(
-    definition.migrate(value, version),
+    yield* definition.migrate(value, version),
     `${describe(record)} migration from version ${version}`,
   )
 })
@@ -189,8 +192,8 @@ export const materialize = (definition: AnyDefinition, stored: StoredDocument) =
 
 /** The initial value of a new incarnation, from the family seed when there is one. */
 export const initialValue = (definition: AnyDefinition, seed: Schema.Json | undefined) =>
-  ownedObject(
+  Effect.flatMap(
     // A family's seed is its initializer's only argument; a singleton's initializer takes none.
     definition.family === true ? definition.initial(seed) : definition.initial(),
-    `Document ${definition.kind} initial value`,
+    (value) => ownedObject(value, `Document ${definition.kind} initial value`),
   )

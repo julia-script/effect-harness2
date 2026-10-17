@@ -26,10 +26,11 @@ const LiveDoc = Document.make<Live>({
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
-  initial: () => {
-    liveInitCount++
-    return { items: [], nested: { count: 0 }, other: { label: 'x' } }
-  },
+  initial: () =>
+    Effect.sync(() => {
+      liveInitCount++
+      return { items: [], nested: { count: 0 }, other: { label: 'x' } }
+    }),
 })
 
 const RewindableLiveDoc = Document.make<Live>({
@@ -38,7 +39,7 @@ const RewindableLiveDoc = Document.make<Live>({
   scope: 'conversation',
   history: 'rewindable',
   fork: 'asOf',
-  initial: () => ({ items: [], nested: { count: 0 }, other: { label: 'x' } }),
+  initial: () => Effect.succeed({ items: [], nested: { count: 0 }, other: { label: 'x' } }),
 })
 
 const LiveDocV2 = Document.make<Live>({
@@ -47,7 +48,7 @@ const LiveDocV2 = Document.make<Live>({
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
-  initial: () => ({ items: [], nested: { count: 0 }, other: { label: 'x' } }),
+  initial: () => Effect.succeed({ items: [], nested: { count: 0 }, other: { label: 'x' } }),
 })
 
 type Counter = { count: number }
@@ -55,7 +56,7 @@ const CounterDoc = Document.make<Counter>({
   kind: 'test.counter',
   version: 1,
   scope: 'session',
-  initial: () => ({ count: 0 }),
+  initial: () => Effect.succeed({ count: 0 }),
 })
 
 type Member = { seed: string; hits: number }
@@ -65,10 +66,11 @@ const MemberDoc = Document.makeFamily<Member, string>({
   version: 1,
   family: true,
   scope: 'session',
-  initial: (seed) => {
-    seeds.push(seed)
-    return { seed, hits: 0 }
-  },
+  initial: (seed) =>
+    Effect.sync(() => {
+      seeds.push(seed)
+      return { seed, hits: 0 }
+    }),
 })
 
 /** Holds calls until released, and reports when the first held call arrives. */
@@ -563,10 +565,11 @@ describe('Session document transactions', () => {
           kind: 'test.late',
           version: 1,
           scope: 'session',
-          initial: () => {
-            initialized++
-            return { count: 0 }
-          },
+          initial: () =>
+            Effect.sync(() => {
+              initialized++
+              return { count: 0 }
+            }),
         })
         const gate = yield* harness.holdFindDocument
         const mints = harness.counts.mints
@@ -680,11 +683,12 @@ describe('Session document transactions', () => {
           kind: 'test.date',
           version: 1,
           scope: 'session',
-          initial: () => {
-            const value: Json.JsonObject = {}
-            Reflect.set(value, 'at', new Date())
-            return value
-          },
+          initial: () =>
+            Effect.sync(() => {
+              const value: Json.JsonObject = {}
+              Reflect.set(value, 'at', new Date())
+              return value
+            }),
         })
         const initial = yield* Effect.flip(session.commit((tx) => tx.doc(DateDoc)))
         expect(initial).toBeInstanceOf(SessionError.DocumentError)

@@ -80,72 +80,80 @@ export const CheckpointInfo = Schema.Struct({
 })
 export type CheckpointInfo = typeof CheckpointInfo.Type
 
-/** Definition fields shared by singletons and families. */
-export interface Common<T extends JsonObject> {
+/**
+ * Fields shared by singletons and families. Callbacks return Effects that need no services, and
+ * whatever they fail with, `E`, fails the access, snapshot or commit that ran them.
+ */
+export interface Common<T extends JsonObject, E> {
   /** Stable persisted kind; part of the public protocol. */
   readonly kind: string
   /** Positive integer version of the stored value shape. */
   readonly version: number
   /** Upgrade a value stored under an older `version`. Its result must be strict JSON. */
-  readonly migrate?: (value: JsonObject, fromVersion: number) => T
-  /** Return true to store this ordinary change as a complete base instead of a delta. */
+  readonly migrate?: (value: JsonObject, fromVersion: number) => Effect.Effect<T, E>
+  /** Succeed with true to store an ordinary change as a complete base instead of a delta. */
   readonly checkpointWhen?: (
     value: Readonly<T>,
     ops: ReadonlyArray<Op>,
     info: CheckpointInfo,
-  ) => boolean
+  ) => Effect.Effect<boolean, E>
 }
 
 /** A singleton document definition. */
-export type Definition<T extends JsonObject, S extends Semantics = Semantics> = Common<T> &
-  S & { readonly initial: () => T }
+export type Definition<T extends JsonObject, E = never, S extends Semantics = Semantics> = Common<
+  T,
+  E
+> &
+  S & { readonly initial: () => Effect.Effect<T, E> }
 
 /** A keyed family definition; `initial(seed)` runs only when a member is absent. */
 export type FamilyDefinition<
   T extends JsonObject,
   I extends Schema.Json,
+  E = never,
   S extends Semantics = Semantics,
-> = Common<T> & S & { readonly family: true; readonly initial: (seed: I) => T }
+> = Common<T, E> & S & { readonly family: true; readonly initial: (seed: I) => Effect.Effect<T, E> }
 
 declare const valueType: unique symbol
 
-/** A typed singleton document. */
-export interface Token<T extends JsonObject, S extends Semantics> {
-  readonly definition: Definition<T, S>
+/** A typed singleton document whose callbacks can fail with `E`. */
+export interface Token<T extends JsonObject, E, S extends Semantics> {
+  readonly definition: Definition<T, E, S>
   readonly [valueType]?: T
 }
 
-/** A typed document family. */
-export interface FamilyToken<T extends JsonObject, I extends Schema.Json, S extends Semantics> {
-  readonly definition: FamilyDefinition<T, I, S>
+/** A typed document family whose callbacks can fail with `E`. */
+export interface FamilyToken<T extends JsonObject, I extends Schema.Json, E, S extends Semantics> {
+  readonly definition: FamilyDefinition<T, I, E, S>
   readonly [valueType]?: T
 }
 
 type ConversationSemantics = LatestSemantics | RewindableSemantics
 
-export type SessionToken<T extends JsonObject> = Token<T, SessionSemantics>
-export type ConversationToken<T extends JsonObject> = Token<T, ConversationSemantics>
-export type RewindableToken<T extends JsonObject> = Token<T, RewindableSemantics>
-export type TaskToken<T extends JsonObject> = Token<T, TaskSemantics>
+export type SessionToken<T extends JsonObject, E = never> = Token<T, E, SessionSemantics>
+export type ConversationToken<T extends JsonObject, E = never> = Token<T, E, ConversationSemantics>
+export type RewindableToken<T extends JsonObject, E = never> = Token<T, E, RewindableSemantics>
+export type TaskToken<T extends JsonObject, E = never> = Token<T, E, TaskSemantics>
 
-export type SessionFamilyToken<T extends JsonObject, I extends Schema.Json> = FamilyToken<
+export type SessionFamilyToken<
+  T extends JsonObject,
+  I extends Schema.Json,
+  E = never,
+> = FamilyToken<T, I, E, SessionSemantics>
+export type ConversationFamilyToken<
+  T extends JsonObject,
+  I extends Schema.Json,
+  E = never,
+> = FamilyToken<T, I, E, ConversationSemantics>
+export type RewindableFamilyToken<
+  T extends JsonObject,
+  I extends Schema.Json,
+  E = never,
+> = FamilyToken<T, I, E, RewindableSemantics>
+export type TaskFamilyToken<T extends JsonObject, I extends Schema.Json, E = never> = FamilyToken<
   T,
   I,
-  SessionSemantics
->
-export type ConversationFamilyToken<T extends JsonObject, I extends Schema.Json> = FamilyToken<
-  T,
-  I,
-  ConversationSemantics
->
-export type RewindableFamilyToken<T extends JsonObject, I extends Schema.Json> = FamilyToken<
-  T,
-  I,
-  RewindableSemantics
->
-export type TaskFamilyToken<T extends JsonObject, I extends Schema.Json> = FamilyToken<
-  T,
-  I,
+  E,
   TaskSemantics
 >
 
@@ -154,33 +162,41 @@ export type TaskFamilyToken<T extends JsonObject, I extends Schema.Json> = Famil
  * is not a positive integer fails every access with `DocumentError`.
  */
 export const make: {
-  <T extends JsonObject>(definition: Definition<T, SessionSemantics>): SessionToken<T>
-  <T extends JsonObject>(definition: Definition<T, LatestSemantics>): ConversationToken<T>
-  <T extends JsonObject>(definition: Definition<T, RewindableSemantics>): RewindableToken<T>
-  <T extends JsonObject>(definition: Definition<T, TaskSemantics>): TaskToken<T>
-} = cast(<T extends JsonObject>(definition: Definition<T>): Token<T, Semantics> => ({ definition }))
+  <T extends JsonObject, E = never>(
+    definition: Definition<T, E, SessionSemantics>,
+  ): SessionToken<T, E>
+  <T extends JsonObject, E = never>(
+    definition: Definition<T, E, LatestSemantics>,
+  ): ConversationToken<T, E>
+  <T extends JsonObject, E = never>(
+    definition: Definition<T, E, RewindableSemantics>,
+  ): RewindableToken<T, E>
+  <T extends JsonObject, E = never>(definition: Definition<T, E, TaskSemantics>): TaskToken<T, E>
+} = cast(<T extends JsonObject, E>(definition: Definition<T, E>): Token<T, E, Semantics> => ({
+  definition,
+}))
 
 /** Define a keyed document family. */
 export const makeFamily: {
-  <T extends JsonObject, I extends Schema.Json>(
-    definition: FamilyDefinition<T, I, SessionSemantics>,
-  ): SessionFamilyToken<T, I>
-  <T extends JsonObject, I extends Schema.Json>(
-    definition: FamilyDefinition<T, I, LatestSemantics>,
-  ): ConversationFamilyToken<T, I>
-  <T extends JsonObject, I extends Schema.Json>(
-    definition: FamilyDefinition<T, I, RewindableSemantics>,
-  ): RewindableFamilyToken<T, I>
-  <T extends JsonObject, I extends Schema.Json>(
-    definition: FamilyDefinition<T, I, TaskSemantics>,
-  ): TaskFamilyToken<T, I>
+  <T extends JsonObject, I extends Schema.Json, E = never>(
+    definition: FamilyDefinition<T, I, E, SessionSemantics>,
+  ): SessionFamilyToken<T, I, E>
+  <T extends JsonObject, I extends Schema.Json, E = never>(
+    definition: FamilyDefinition<T, I, E, LatestSemantics>,
+  ): ConversationFamilyToken<T, I, E>
+  <T extends JsonObject, I extends Schema.Json, E = never>(
+    definition: FamilyDefinition<T, I, E, RewindableSemantics>,
+  ): RewindableFamilyToken<T, I, E>
+  <T extends JsonObject, I extends Schema.Json, E = never>(
+    definition: FamilyDefinition<T, I, E, TaskSemantics>,
+  ): TaskFamilyToken<T, I, E>
 } = cast(
-  <T extends JsonObject, I extends Schema.Json>(
-    definition: FamilyDefinition<T, I>,
-  ): FamilyToken<T, I, Semantics> => ({ definition }),
+  <T extends JsonObject, I extends Schema.Json, E>(
+    definition: FamilyDefinition<T, I, E>,
+  ): FamilyToken<T, I, E, Semantics> => ({ definition }),
 )
 
-type DraftOf<T extends JsonObject> = Effect.Effect<Draft<T>, TxDocumentError>
+type DraftOf<T extends JsonObject, E> = Effect.Effect<Draft<T>, TxDocumentError | E>
 
 /**
  * Acquire a document's draft for this transaction, creating the incarnation from the
@@ -188,76 +204,81 @@ type DraftOf<T extends JsonObject> = Effect.Effect<Draft<T>, TxDocumentError>
  * it is created. Edits to the draft commit with the transaction.
  */
 export interface Acquire {
-  <T extends JsonObject>(token: SessionToken<T>): DraftOf<T>
-  <T extends JsonObject>(token: ConversationToken<T>, conversationId: ConversationId): DraftOf<T>
-  <T extends JsonObject>(token: TaskToken<T>, taskId: TaskId): DraftOf<T>
-  <T extends JsonObject, I extends Schema.Json>(
-    token: SessionFamilyToken<T, I>,
+  <T extends JsonObject, E>(token: SessionToken<T, E>): DraftOf<T, E>
+  <T extends JsonObject, E>(
+    token: ConversationToken<T, E>,
+    conversationId: ConversationId,
+  ): DraftOf<T, E>
+  <T extends JsonObject, E>(token: TaskToken<T, E>, taskId: TaskId): DraftOf<T, E>
+  <T extends JsonObject, I extends Schema.Json, E>(
+    token: SessionFamilyToken<T, I, E>,
     key: string,
     seed: I,
-  ): DraftOf<T>
-  <T extends JsonObject, I extends Schema.Json>(
-    token: ConversationFamilyToken<T, I>,
+  ): DraftOf<T, E>
+  <T extends JsonObject, I extends Schema.Json, E>(
+    token: ConversationFamilyToken<T, I, E>,
     conversationId: ConversationId,
     key: string,
     seed: I,
-  ): DraftOf<T>
-  <T extends JsonObject, I extends Schema.Json>(
-    token: TaskFamilyToken<T, I>,
+  ): DraftOf<T, E>
+  <T extends JsonObject, I extends Schema.Json, E>(
+    token: TaskFamilyToken<T, I, E>,
     taskId: TaskId,
     key: string,
     seed: I,
-  ): DraftOf<T>
+  ): DraftOf<T, E>
 }
+
+type Retired = Effect.Effect<void, TxDocumentError>
 
 /**
  * Retire a document's current incarnation in this commit; an acquired draft's final content is
  * written first. Acquiring the address again creates a new incarnation.
  */
 export interface Retire {
-  <T extends JsonObject>(token: SessionToken<T>): Effect.Effect<void, TxDocumentError>
-  <T extends JsonObject>(
-    token: ConversationToken<T>,
-    conversationId: ConversationId,
-  ): Effect.Effect<void, TxDocumentError>
-  <T extends JsonObject>(token: TaskToken<T>, taskId: TaskId): Effect.Effect<void, TxDocumentError>
-  <T extends JsonObject, I extends Schema.Json>(
-    token: SessionFamilyToken<T, I>,
+  <T extends JsonObject, E>(token: SessionToken<T, E>): Retired
+  <T extends JsonObject, E>(token: ConversationToken<T, E>, conversationId: ConversationId): Retired
+  <T extends JsonObject, E>(token: TaskToken<T, E>, taskId: TaskId): Retired
+  <T extends JsonObject, I extends Schema.Json, E>(
+    token: SessionFamilyToken<T, I, E>,
     key: string,
-  ): Effect.Effect<void, TxDocumentError>
-  <T extends JsonObject, I extends Schema.Json>(
-    token: ConversationFamilyToken<T, I>,
+  ): Retired
+  <T extends JsonObject, I extends Schema.Json, E>(
+    token: ConversationFamilyToken<T, I, E>,
     conversationId: ConversationId,
     key: string,
-  ): Effect.Effect<void, TxDocumentError>
-  <T extends JsonObject, I extends Schema.Json>(
-    token: TaskFamilyToken<T, I>,
+  ): Retired
+  <T extends JsonObject, I extends Schema.Json, E>(
+    token: TaskFamilyToken<T, I, E>,
     taskId: TaskId,
     key: string,
-  ): Effect.Effect<void, TxDocumentError>
+  ): Retired
 }
 
-type SnapshotOf<T extends JsonObject> = Effect.Effect<Readonly<T> | undefined, SnapshotError>
+type SnapshotOf<T extends JsonObject, E> = Effect.Effect<Readonly<T> | undefined, SnapshotError | E>
 
 /** Read a document's committed value; never creates one. Absent documents read `undefined`. */
 export interface Snapshot {
-  <T extends JsonObject>(token: SessionToken<T>): SnapshotOf<T>
-  <T extends JsonObject>(token: ConversationToken<T>, conversationId: ConversationId): SnapshotOf<T>
-  <T extends JsonObject>(token: TaskToken<T>, taskId: TaskId): SnapshotOf<T>
-  <T extends JsonObject, I extends Schema.Json>(
-    token: SessionFamilyToken<T, I>,
+  <T extends JsonObject, E>(token: SessionToken<T, E>): SnapshotOf<T, E>
+  <T extends JsonObject, E>(
+    token: ConversationToken<T, E>,
+    conversationId: ConversationId,
+  ): SnapshotOf<T, E>
+  <T extends JsonObject, E>(token: TaskToken<T, E>, taskId: TaskId): SnapshotOf<T, E>
+  <T extends JsonObject, I extends Schema.Json, E>(
+    token: SessionFamilyToken<T, I, E>,
     key: string,
-  ): SnapshotOf<T>
-  <T extends JsonObject, I extends Schema.Json>(
-    token: ConversationFamilyToken<T, I>,
+  ): SnapshotOf<T, E>
+  <T extends JsonObject, I extends Schema.Json, E>(
+    token: ConversationFamilyToken<T, I, E>,
     conversationId: ConversationId,
     key: string,
-  ): SnapshotOf<T>
-  <T extends JsonObject, I extends Schema.Json>(
-    token: TaskFamilyToken<T, I>,
+  ): SnapshotOf<T, E>
+  <T extends JsonObject, I extends Schema.Json, E>(
+    token: TaskFamilyToken<T, I, E>,
     taskId: TaskId,
     key: string,
-  ): SnapshotOf<T>
+  ): SnapshotOf<T, E>
 }
 
 /**
@@ -265,15 +286,15 @@ export interface Snapshot {
  * `conversationId`, following fork ancestry. Fails when the entry is not visible.
  */
 export interface SnapshotAsOf {
-  <T extends JsonObject>(
-    token: RewindableToken<T>,
+  <T extends JsonObject, E>(
+    token: RewindableToken<T, E>,
     conversationId: ConversationId,
     at: EntryId,
-  ): SnapshotOf<T>
-  <T extends JsonObject, I extends Schema.Json>(
-    token: RewindableFamilyToken<T, I>,
+  ): SnapshotOf<T, E>
+  <T extends JsonObject, I extends Schema.Json, E>(
+    token: RewindableFamilyToken<T, I, E>,
     conversationId: ConversationId,
     key: string,
     at: EntryId,
-  ): SnapshotOf<T>
+  ): SnapshotOf<T, E>
 }

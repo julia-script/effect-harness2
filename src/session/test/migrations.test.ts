@@ -1,5 +1,5 @@
 /* oxlint-disable max-lines, max-lines-per-function -- ported describe blocks */
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, expectTypeOf, test } from 'bun:test'
 import { Data, Effect, Exit, Scope } from 'effect'
 import { cast } from 'effect/Function'
 import type { Ids, Json, Write } from '../../storage/schema/index.ts'
@@ -32,6 +32,9 @@ const documentChanges = (publication: Session.CommitPublication) =>
 /** A commit callback's own failure. */
 class Rollback extends Data.TaggedError('Rollback')<{ readonly message: string }> {}
 
+/** A migration's own typed failure. */
+class MigrationFailed extends Data.TaggedError('MigrationFailed')<{ readonly from: number }> {}
+
 /** The message of an expected failure. */
 const failureMessage = <A, E extends { readonly message: string }, R>(
   effect: Effect.Effect<A, E, R>,
@@ -49,7 +52,7 @@ describe('Session document migrations', () => {
           kind: 'migration.read-only',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 2 }),
+          initial: () => Effect.succeed({ count: 2 }),
         })
         let calls = 0
         let retained: Current | undefined
@@ -58,13 +61,14 @@ describe('Session document migrations', () => {
           kind: 'migration.read-only',
           version: 3,
           scope: 'session',
-          initial: () => ({ count: 0, labels: [] }),
-          migrate: (value, fromVersion) => {
-            fromVersions.push(fromVersion)
-            calls++
-            retained = { count: Number(value.count), labels: ['migrated'] }
-            return retained
-          },
+          initial: () => Effect.succeed({ count: 0, labels: [] }),
+          migrate: (value, fromVersion) =>
+            Effect.sync(() => {
+              fromVersions.push(fromVersion)
+              calls++
+              retained = { count: Number(value.count), labels: ['migrated'] }
+              return retained
+            }),
         })
         yield* session.commit((tx) => tx.doc(Old))
         yield* session.unloadDocuments
@@ -98,19 +102,21 @@ describe('Session document migrations', () => {
           kind: 'migration.transition',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 4 }),
+          initial: () => Effect.succeed({ count: 4 }),
         })
         let checkpoints = 0
         const Current = Document.make<{ count: number }>({
           kind: 'migration.transition',
           version: 3,
           scope: 'session',
-          initial: () => ({ count: 0 }),
-          migrate: (value, fromVersion) => ({ count: Number(value.count) + fromVersion - 1 }),
-          checkpointWhen: () => {
-            checkpoints++
-            return false
-          },
+          initial: () => Effect.succeed({ count: 0 }),
+          migrate: (value, fromVersion) =>
+            Effect.succeed({ count: Number(value.count) + fromVersion - 1 }),
+          checkpointWhen: () =>
+            Effect.sync(() => {
+              checkpoints++
+              return false
+            }),
         })
         yield* session.commit((tx) => tx.doc(Old))
         yield* session.unloadDocuments
@@ -151,18 +157,19 @@ describe('Session document migrations', () => {
           kind: 'migration.rollback',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 1 }),
+          initial: () => Effect.succeed({ count: 1 }),
         })
         let migrations = 0
         const Current = Document.make<{ count: number; migrated: boolean }>({
           kind: 'migration.rollback',
           version: 2,
           scope: 'session',
-          initial: () => ({ count: 0, migrated: false }),
-          migrate: (value) => {
-            migrations++
-            return { count: Number(value.count), migrated: true }
-          },
+          initial: () => Effect.succeed({ count: 0, migrated: false }),
+          migrate: (value) =>
+            Effect.sync(() => {
+              migrations++
+              return { count: Number(value.count), migrated: true }
+            }),
         })
         yield* session.commit((tx) => tx.doc(Old))
         yield* session.unloadDocuments
@@ -213,21 +220,21 @@ describe('Session document migrations', () => {
           kind: 'migration.invalid',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 1 }),
+          initial: () => Effect.succeed({ count: 1 }),
         })
         const Invalid = Document.make<Json.JsonObject>({
           kind: 'migration.invalid',
           version: 2,
           scope: 'session',
-          initial: () => ({}),
+          initial: () => Effect.succeed({}),
           // A callback that breaks its contract, as untyped extension code can.
-          migrate: cast(() => ({ invalid: new Date() })),
+          migrate: cast(() => Effect.succeed({ invalid: new Date() })),
         })
         const Other = Document.make<{ ok: boolean }>({
           kind: 'migration.invalid.other',
           version: 1,
           scope: 'session',
-          initial: () => ({ ok: true }),
+          initial: () => Effect.succeed({ ok: true }),
         })
         yield* session.commit((tx) => tx.doc(Old))
         yield* session.unloadDocuments
@@ -251,19 +258,19 @@ describe('Session document migrations', () => {
           kind: 'migration.compatibility',
           version: 2,
           scope: 'session',
-          initial: () => ({ count: 2 }),
+          initial: () => Effect.succeed({ count: 2 }),
         })
         const V1 = Document.make<{ count: number }>({
           kind: 'migration.compatibility',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 1 }),
+          initial: () => Effect.succeed({ count: 1 }),
         })
         const V3WithoutMigration = Document.make<{ count: number }>({
           kind: 'migration.compatibility',
           version: 3,
           scope: 'session',
-          initial: () => ({ count: 3 }),
+          initial: () => Effect.succeed({ count: 3 }),
         })
         yield* session.commit((tx) => tx.doc(V2))
         yield* session.unloadDocuments
@@ -291,6 +298,35 @@ describe('Session document migrations', () => {
       }),
     ))
 
+  test('fails snapshots and transactions with the typed error of a failed migration and writes nothing', () =>
+    runSession(({ session, recorder }) =>
+      Effect.gen(function* () {
+        const Old = Document.make<{ count: number }>({
+          kind: 'migration.failed',
+          version: 1,
+          scope: 'session',
+          initial: () => Effect.succeed({ count: 1 }),
+        })
+        const Current = Document.make<{ count: number }, MigrationFailed>({
+          kind: 'migration.failed',
+          version: 2,
+          scope: 'session',
+          initial: () => Effect.succeed({ count: 0 }),
+          migrate: (_value, from) => Effect.fail(new MigrationFailed({ from })),
+        })
+        yield* session.commit((tx) => tx.doc(Old))
+        const commits = recorder.commits.length
+        const read = session.snapshot(Current)
+        expectTypeOf<MigrationFailed>().toExtend<Effect.Error<typeof read>>()
+        expect(yield* Effect.flip(read)).toEqual(new MigrationFailed({ from: 1 }))
+        const commit = session.commit((tx) => tx.doc(Current))
+        expectTypeOf<MigrationFailed>().toExtend<Effect.Error<typeof commit>>()
+        expect(yield* Effect.flip(commit)).toEqual(new MigrationFailed({ from: 1 }))
+        expect(recorder.commits).toHaveLength(commits)
+        expect(yield* session.snapshot(Old)).toEqual({ count: 1 })
+      }),
+    ))
+
   test('persists a required migration base before retirement without consulting the checkpoint predicate', () =>
     runSession(({ session, recorder }) =>
       Effect.gen(function* () {
@@ -298,17 +334,18 @@ describe('Session document migrations', () => {
           kind: 'migration.retire',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 1 }),
+          initial: () => Effect.succeed({ count: 1 }),
         })
         const Current = Document.make<{ count: number }>({
           kind: 'migration.retire',
           version: 2,
           scope: 'session',
-          initial: () => ({ count: 0 }),
-          migrate: (value) => ({ count: Number(value.count) }),
-          checkpointWhen: () => {
-            throw new Error('must not run')
-          },
+          initial: () => Effect.succeed({ count: 0 }),
+          migrate: (value) => Effect.succeed({ count: Number(value.count) }),
+          checkpointWhen: () =>
+            Effect.sync(() => {
+              throw new Error('must not run')
+            }),
         })
         yield* session.commit((tx) => tx.doc(Old))
         yield* session.unloadDocuments
@@ -327,32 +364,33 @@ describe('Session document migrations', () => {
           kind: 'migration.lazy.first',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 1 }),
+          initial: () => Effect.succeed({ count: 1 }),
         })
         const SecondV1 = Document.make<{ count: number }>({
           kind: 'migration.lazy.second',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 2 }),
+          initial: () => Effect.succeed({ count: 2 }),
         })
         let secondMigrations = 0
         const FirstV2 = Document.make<{ count: number }>({
           kind: 'migration.lazy.first',
           version: 2,
           scope: 'session',
-          initial: () => ({ count: 0 }),
-          migrate: (value) => ({ count: Number(value.count) }),
+          initial: () => Effect.succeed({ count: 0 }),
+          migrate: (value) => Effect.succeed({ count: Number(value.count) }),
         })
         // Defined but never used: defining a newer version migrates nothing.
         Document.make<{ count: number }>({
           kind: 'migration.lazy.second',
           version: 2,
           scope: 'session',
-          initial: () => ({ count: 0 }),
-          migrate: (value) => {
-            secondMigrations++
-            return { count: Number(value.count) }
-          },
+          initial: () => Effect.succeed({ count: 0 }),
+          migrate: (value) =>
+            Effect.sync(() => {
+              secondMigrations++
+              return { count: Number(value.count) }
+            }),
         })
         yield* session.commit((tx) => Effect.all([tx.doc(FirstV1), tx.doc(SecondV1)]))
         yield* session.unloadDocuments
@@ -383,7 +421,7 @@ describe('Session historical document snapshots', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ count: 0 }),
+          initial: () => Effect.succeed({ count: 0 }),
         })
         const Family = Document.makeFamily<{ seed: string; count: number }, string>({
           kind: 'history.family',
@@ -392,7 +430,7 @@ describe('Session historical document snapshots', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: (seed) => ({ seed, count: 0 }),
+          initial: (seed) => Effect.succeed({ seed, count: 0 }),
         })
         const migrations: Array<number> = []
         const V3 = Document.make<{ count: number; version: number }>({
@@ -401,11 +439,12 @@ describe('Session historical document snapshots', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ count: 0, version: 3 }),
-          migrate: (value, fromVersion) => {
-            migrations.push(fromVersion)
-            return { count: Number(value.count), version: 3 }
-          },
+          initial: () => Effect.succeed({ count: 0, version: 3 }),
+          migrate: (value, fromVersion) =>
+            Effect.sync(() => {
+              migrations.push(fromVersion)
+              return { count: Number(value.count), version: 3 }
+            }),
         })
         const conversationId = yield* createConversation(session)
         const firstEntry = yield* session.commit((tx) =>
@@ -490,7 +529,7 @@ describe('Session historical document snapshots', () => {
           scope: 'conversation',
           history: 'rewindable',
           fork: 'asOf',
-          initial: () => ({ value: 'initial' }),
+          initial: () => Effect.succeed({ value: 'initial' }),
         })
         const scope = yield* Scope.make()
         const { session } = yield* Scope.provide(openSession, scope)
@@ -541,14 +580,15 @@ describe('Session tracker cache across definition versions', () => {
     kind: 'cache.versioned',
     version: 1,
     scope: 'session',
-    initial: () => ({ name: 'first' }),
+    initial: () => Effect.succeed({ name: 'first' }),
   })
   const V2Doc = Document.make<{ names: Array<string> }>({
     kind: 'cache.versioned',
     version: 2,
     scope: 'session',
-    initial: () => ({ names: [] }),
-    migrate: (value) => ({ names: [typeof value.name === 'string' ? value.name : ''] }),
+    initial: () => Effect.succeed({ names: [] }),
+    migrate: (value) =>
+      Effect.succeed({ names: [typeof value.name === 'string' ? value.name : ''] }),
   })
 
   test('migrates a document cached by an older token without unloading', () =>

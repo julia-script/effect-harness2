@@ -12,7 +12,7 @@ import type { Session } from '../index.ts'
 import { createConversation, createTask, runSession } from './support.ts'
 
 type State = { value: number }
-const initial = (): State => ({ value: 0 })
+const initial = () => Effect.succeed<State>({ value: 0 })
 
 const SessionDoc = Document.make<State>({
   kind: 't.session',
@@ -42,7 +42,7 @@ const SessionFamily = Document.makeFamily<State, number>({
   version: 1,
   family: true,
   scope: 'session',
-  initial: (seed) => ({ value: seed }),
+  initial: (seed) => Effect.succeed({ value: seed }),
 })
 const ConversationFamily = Document.makeFamily<State, number>({
   kind: 't.conversation-family',
@@ -51,14 +51,14 @@ const ConversationFamily = Document.makeFamily<State, number>({
   scope: 'conversation',
   history: 'rewindable',
   fork: 'initial',
-  initial: (seed) => ({ value: seed }),
+  initial: (seed) => Effect.succeed({ value: seed }),
 })
 const TaskFamily = Document.makeFamily<State, number>({
   kind: 't.task-family',
   version: 1,
   family: true,
   scope: 'task',
-  initial: (seed) => ({ value: seed }),
+  initial: (seed) => Effect.succeed({ value: seed }),
 })
 
 type Drafted = Tracker.Draft<State>

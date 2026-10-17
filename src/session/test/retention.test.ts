@@ -71,7 +71,7 @@ const CounterDoc = Document.make<Counter>({
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
-  initial: () => ({ count: 0 }),
+  initial: () => Effect.succeed({ count: 0 }),
 })
 const RewindableDoc = Document.make<Counter>({
   kind: 'test.retention.rewindable',
@@ -79,7 +79,7 @@ const RewindableDoc = Document.make<Counter>({
   scope: 'conversation',
   history: 'rewindable',
   fork: 'asOf',
-  initial: () => ({ count: 0 }),
+  initial: () => Effect.succeed({ count: 0 }),
 })
 /** A third-party conversation family: one member per event. */
 const EventDoc = Document.makeFamily<{ seq: number }, number>({
@@ -89,13 +89,13 @@ const EventDoc = Document.makeFamily<{ seq: number }, number>({
   history: 'latest',
   fork: 'initial',
   family: true,
-  initial: (seq) => ({ seq }),
+  initial: (seq) => Effect.succeed({ seq }),
 })
 const SessionCounterDoc = Document.make<Counter>({
   kind: 'test.retention.session-counter',
   version: 1,
   scope: 'session',
-  initial: () => ({ count: 0 }),
+  initial: () => Effect.succeed({ count: 0 }),
 })
 
 const bump = (session: Session.Service, conversationId: Ids.ConversationId, by = 1) =>
@@ -324,21 +324,22 @@ describe('document cache retention', () => {
           kind: 'test.retention.migrating',
           version: 1,
           scope: 'session',
-          initial: () => ({ count: 1 }),
+          initial: () => Effect.succeed({ count: 1 }),
         })
         let migrations = 0
         const V2 = Document.make<{ count: number; migrated: boolean }>({
           kind: 'test.retention.migrating',
           version: 2,
           scope: 'session',
-          initial: () => ({ count: 0, migrated: true }),
-          migrate: (value) => {
-            migrations++
-            return {
-              count: typeof value['count'] === 'number' ? value['count'] : 0,
-              migrated: true,
-            }
-          },
+          initial: () => Effect.succeed({ count: 0, migrated: true }),
+          migrate: (value) =>
+            Effect.sync(() => {
+              migrations++
+              return {
+                count: typeof value['count'] === 'number' ? value['count'] : 0,
+                migrated: true,
+              }
+            }),
         })
         const { session } = yield* open(0)
         yield* session.commit((tx) => Effect.asVoid(tx.doc(V1)))

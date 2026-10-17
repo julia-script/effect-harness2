@@ -1,8 +1,9 @@
 /**
- * The `Storage` service: the Session's atomic persistence boundary, and its in-memory layer.
+ * The `Storage` service: the Session's atomic persistence boundary, and its in-memory and JSONL
+ * layers.
  */
 import { Context, Layer } from 'effect'
-import type { Effect, Scope } from 'effect'
+import type { Effect, FileSystem, Path, Scope } from 'effect'
 import type { StorageRequestError } from './StorageError.ts'
 import type { ConversationRecord } from './schema/Conversation.ts'
 import type {
@@ -32,6 +33,7 @@ import type {
 import type { SubmissionRecord } from './schema/Submission.ts'
 import type { TaskRecord } from './schema/Task.ts'
 import type { StorageWrite } from './schema/Write.ts'
+import * as jsonl from './internal/jsonlStorage.ts'
 import * as internal from './internal/memoryStorage.ts'
 import type { StorageError } from './StorageError.ts'
 
@@ -174,3 +176,33 @@ export const makeMemory: Effect.Effect<Service, never, Scope.Scope> = internal.m
 
 /** A fresh, empty in-memory `Storage` for each build of the layer. */
 export const layerMemory: Layer.Layer<Storage> = Layer.effect(Storage, makeMemory)
+
+/** Options for a JSONL store. */
+export interface JsonlOptions {
+  /**
+   * Flush every appended sidecar to stable storage before the marker that publishes it, and the
+   * main file before reclaiming obsolete sidecars. Defaults to `false`.
+   */
+  readonly fsync?: boolean
+}
+
+/**
+ * Open or create a JSONL storage directory, ported from pi's `storage/jsonl/storage.ts`, and
+ * recover every commit whose marker is complete. Fails with a `StorageError` when the files are
+ * corrupt. Closing the scope closes the store.
+ *
+ * A failed write may leave a partial commit on disk, so it poisons the store: every later
+ * operation fails until the directory is reopened.
+ */
+export const makeJsonl: (
+  directory: string,
+  options?: JsonlOptions,
+) => Effect.Effect<Service, StorageError, FileSystem.FileSystem | Path.Path | Scope.Scope> =
+  jsonl.makeJsonl
+
+/** A `Storage` persisted as JSONL files in `directory`. */
+export const layerJsonl = (
+  directory: string,
+  options?: JsonlOptions,
+): Layer.Layer<Storage, StorageError, FileSystem.FileSystem | Path.Path> =>
+  Layer.effect(Storage, makeJsonl(directory, options))

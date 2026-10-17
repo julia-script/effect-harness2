@@ -54,7 +54,8 @@ const document = (state: State, id: number, at: DocumentPoint) =>
     stored === undefined ? undefined : { ...stored, record: structuredClone(stored.record) },
   )
 
-const service = (state: State): Service => {
+/** The `Storage` operations over one in-memory state. */
+export const service = (state: State): Service => {
   const open = ensureOpen(state)
   return {
     commit: (writes) => commit(state, writes),

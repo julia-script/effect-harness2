@@ -158,23 +158,51 @@ const applyRecord = (state: State, write: ResolvedWrite, seq: Seq): void => {
   }
 }
 
+/** A validated, detached batch whose application can no longer fail. */
+export interface PreparedCommit {
+  readonly seq: Seq
+  /** Deeply frozen detached writes with copies resolved, for persistence. */
+  readonly writes: ReadonlyArray<ResolvedWrite>
+  /** Apply the batch once; later calls return the same sequence and change nothing. */
+  readonly apply: () => Seq
+}
+
 /**
- * Atomically persist one batch. Everything that can reject the batch runs before the first state
- * change, so a rejected batch has no effect.
+ * Validate and detach one batch without changing observable state. Everything that can reject
+ * the batch runs here, so a rejected batch has no effect. Replays pass the persisted `seq`.
  */
-export const commit = Effect.fnUntraced(function* (
+export const prepareCommit = Effect.fnUntraced(function* (
   state: State,
   writes: ReadonlyArray<StorageWrite>,
+  seq: Seq = Seq.make(state.nextSeq),
 ) {
   yield* ensureOpen(state)
-  const seq = Seq.make(state.nextSeq)
+  if (seq < state.nextSeq) {
+    return yield* new StorageError({ message: `Commit sequence ${seq} does not strictly increase` })
+  }
   const detached = freeze(yield* resolveDocumentCopies(state, structuredClone(writes)))
   yield* checkGlobalIds(state, detached)
   const documentActions = yield* prepareDocumentActions(detached)
   yield* checkDocumentActions(state, documentActions)
-
-  for (const write of detached) applyRecord(state, write, seq)
-  applyDocumentActions(state, documentActions, seq)
-  state.nextSeq = seq + 1
-  return seq
+  let applied = false
+  const prepared: PreparedCommit = {
+    seq,
+    writes: detached,
+    apply: () => {
+      if (applied) return seq
+      applied = true
+      for (const write of detached) applyRecord(state, write, seq)
+      applyDocumentActions(state, documentActions, seq)
+      state.nextSeq = seq + 1
+      return seq
+    },
+  }
+  return prepared
 })
+
+/** Atomically persist one batch: a rejected batch has no effect. */
+export const commit = (
+  state: State,
+  writes: ReadonlyArray<StorageWrite>,
+): Effect.Effect<Seq, StorageError> =>
+  Effect.map(prepareCommit(state, writes), (prepared) => prepared.apply())

@@ -18,5 +18,18 @@
     "typescript/prefer-readonly-parameter-types": "off",
     "max-classes-per-file": "off"
   },
-  "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"]
+  "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"],
+  "overrides": [
+    {
+      "files": [
+        "src/storage/Storage.ts",
+        "src/storage/internal/jsonlStorage.ts",
+        "src/storage/internal/jsonl/**",
+        "src/storage/test/jsonl/**"
+      ],
+      "rules": {
+        "effecttsgo/unstable-api-usage": "off"
+      }
+    }
+  ]
 }

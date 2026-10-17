@@ -82,8 +82,14 @@ export const materializeDocument = (
   )
 }
 
-const copiedBase = Effect.fnUntraced(function* (
-  state: State,
+/** Reads one incarnation at a point, as `materializeDocument` does for a backend. */
+export type Materialize<E, R = never> = (
+  id: number,
+  at: DocumentPoint,
+) => Effect.Effect<StoredDocument | undefined, E, R>
+
+const copiedBase = Effect.fnUntraced(function* <E, R>(
+  materialize: Materialize<E, R>,
   write: Extract<StorageWrite, { readonly type: 'document.copy' }>,
   changed: ReadonlySet<number>,
 ) {
@@ -91,7 +97,7 @@ const copiedBase = Effect.fnUntraced(function* (
   if (changed.has(source.id)) {
     return yield* reject(`Fork source document ${source.id} is changed in the copy batch`)
   }
-  const stored = yield* materializeDocument(state, source.id, source.at)
+  const stored = yield* materialize(source.id, source.at)
   if (stored === undefined) {
     return yield* reject(`Fork source document ${source.id} cannot be read`)
   }
@@ -125,14 +131,14 @@ const changedDocumentIds = (writes: ReadonlyArray<StorageWrite>): ReadonlySet<nu
 }
 
 /** Turn each `document.copy` into a `document.create` of its source's materialized base. */
-export const resolveDocumentCopies = (
-  state: State,
+export const resolveDocumentCopies = <E, R>(
+  materialize: Materialize<E, R>,
   writes: ReadonlyArray<StorageWrite>,
-): Effect.Effect<ReadonlyArray<ResolvedWrite>, StorageError> => {
+): Effect.Effect<ReadonlyArray<ResolvedWrite>, StorageError, R> => {
   const changed = changedDocumentIds(writes)
   return Effect.forEach(writes, (write) =>
     write.type === 'document.copy'
-      ? copiedBase(state, write, changed).pipe(
+      ? copiedBase(materialize, write, changed).pipe(
           Effect.mapError(
             (cause) =>
               new StorageError({ message: `Document copy ${write.record.id} was rejected`, cause }),

@@ -1,6 +1,7 @@
 import { Effect } from 'effect'
 import { Seq } from '../../schema/Ids.ts'
 import type { ConversationRecord } from '../../schema/Conversation.ts'
+import type { DocumentPoint } from '../../schema/Document.ts'
 import type { EntryRecord } from '../../schema/Entry.ts'
 import type { SubmissionRecord } from '../../schema/Submission.ts'
 import type { TaskRecord } from '../../schema/Task.ts'
@@ -8,6 +9,7 @@ import type { StorageWrite } from '../../schema/Write.ts'
 import {
   applyDocumentActions,
   checkDocumentActions,
+  materializeDocument,
   prepareDocumentActions,
   resolveDocumentCopies,
 } from './documents.ts'
@@ -24,7 +26,7 @@ import type { State, TableName } from './state.ts'
 import { StorageError } from '../../StorageError.ts'
 
 /** The table and ID a write creates or replaces; document changes and retirements claim none. */
-const claimOf = (
+export const claimOf = (
   write: StorageWrite,
 ): { readonly table: TableName; readonly id: number } | undefined => {
   if (write.type === 'document.create' || write.type === 'document.copy') {
@@ -36,12 +38,12 @@ const claimOf = (
 
 /** Why a write cannot claim its ID, given the IDs claimed earlier in the same batch. */
 const claimProblem = (
-  state: State,
+  recordTypes: ReadonlyMap<number, TableName>,
   claimed: ReadonlyMap<number, TableName>,
   table: TableName,
   id: number,
 ): string | undefined => {
-  const existing = state.recordTypes.get(id)
+  const existing = recordTypes.get(id)
   const earlier = claimed.get(id)
   if (table === 'conversation' || table === 'entry' || table === 'document') {
     // Immutable records are created exactly once.
@@ -55,16 +57,19 @@ const claimProblem = (
   return undefined
 }
 
-/** Enforce global ID ownership: one table per ID, and immutable records are created once. */
-const checkGlobalIds = (
-  state: State,
+/**
+ * Enforce global ID ownership: one table per ID, and immutable records are created once.
+ * `recordTypes` holds the table of every stored ID the batch claims.
+ */
+export const checkGlobalIds = (
+  recordTypes: ReadonlyMap<number, TableName>,
   writes: ReadonlyArray<StorageWrite>,
 ): Effect.Effect<void, StorageError> => {
   const claimed = new Map<number, TableName>()
   for (const write of writes) {
     const claim = claimOf(write)
     if (claim === undefined) continue
-    const problem = claimProblem(state, claimed, claim.table, claim.id)
+    const problem = claimProblem(recordTypes, claimed, claim.table, claim.id)
     if (problem !== undefined) return Effect.fail(new StorageError({ message: problem }))
     claimed.set(claim.id, claim.table)
   }
@@ -180,8 +185,9 @@ export const prepareCommit = Effect.fnUntraced(function* (
   if (seq < state.nextSeq) {
     return yield* new StorageError({ message: `Commit sequence ${seq} does not strictly increase` })
   }
-  const detached = freeze(yield* resolveDocumentCopies(state, structuredClone(writes)))
-  yield* checkGlobalIds(state, detached)
+  const materialize = (id: number, at: DocumentPoint) => materializeDocument(state, id, at)
+  const detached = freeze(yield* resolveDocumentCopies(materialize, structuredClone(writes)))
+  yield* checkGlobalIds(state.recordTypes, detached)
   const documentActions = yield* prepareDocumentActions(detached)
   yield* checkDocumentActions(state, documentActions)
   let applied = false

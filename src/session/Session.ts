@@ -2,14 +2,17 @@
  * The `Session` service: one mutation line over a `Storage`, its transactions, and the
  * publication of what each commit changed. Ported from pi's `packages/durable/src/session`.
  */
-import { Context, Layer } from 'effect'
-import type { Effect, PubSub, Schema, Scope } from 'effect'
+import { Context, Layer, Schema } from 'effect'
+import type { Effect, PubSub, Scope } from 'effect'
 import type { Storage } from '../storage/Storage.ts'
-import type { StorageError, StorageRequestError } from '../storage/StorageError.ts'
-import type { ConversationRecord } from '../storage/schema/Conversation.ts'
-import type { DocumentCopySource, DocumentRecord, Op } from '../storage/schema/Document.ts'
-import type { EntryRecord } from '../storage/schema/Entry.ts'
-import type { ConversationId, EntryId, Seq, SubmissionId, TaskId } from '../storage/schema/Ids.ts'
+import { StorageError } from '../storage/StorageError.ts'
+import type { StorageRequestError } from '../storage/StorageError.ts'
+import { ConversationRecord } from '../storage/schema/Conversation.ts'
+import { DocumentCopySource, DocumentRecord, Op } from '../storage/schema/Document.ts'
+import { EntryRecord } from '../storage/schema/Entry.ts'
+import { ConversationId, EntryId, Seq, TaskId } from '../storage/schema/Ids.ts'
+import type { SubmissionId } from '../storage/schema/Ids.ts'
+import { JsonObject } from '../storage/schema/Json.ts'
 import type {
   ConversationQuery,
   Cursor,
@@ -17,9 +20,9 @@ import type {
   Page,
   TaskQuery,
 } from '../storage/schema/Scan.ts'
-import type { SubmissionCreate, SubmissionRecord } from '../storage/schema/Submission.ts'
-import type { TaskRecord } from '../storage/schema/Task.ts'
-import type { StorageWrite } from '../storage/schema/Write.ts'
+import { SubmissionRecord } from '../storage/schema/Submission.ts'
+import type { SubmissionCreate } from '../storage/schema/Submission.ts'
+import { TaskRecord } from '../storage/schema/Task.ts'
 import * as internal from './internal/session.ts'
 import type {
   ReadAfterWrite,
@@ -29,29 +32,34 @@ import type {
 } from './SessionError.ts'
 
 /** Ownership selected explicitly whenever a conversation is created. */
-export type ConversationOwnership =
-  | { readonly kind: 'ownerless' }
-  | { readonly kind: 'task'; readonly taskId: TaskId }
+export const ConversationOwnership = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal('ownerless') }),
+  Schema.Struct({ kind: Schema.Literal('task'), taskId: TaskId }),
+])
+export type ConversationOwnership = typeof ConversationOwnership.Type
 
 /** Who owns a task: its conversation, or another task of the same conversation. */
-export type TaskOwnership =
-  | { readonly kind: 'conversation' }
-  | { readonly kind: 'task'; readonly taskId: TaskId }
+export const TaskOwnership = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal('conversation') }),
+  Schema.Struct({ kind: Schema.Literal('task'), taskId: TaskId }),
+])
+export type TaskOwnership = typeof TaskOwnership.Type
 
 /** Creation options for a durable task. */
-export interface TaskOptions {
+export const TaskOptions = Schema.Struct({
   /** Required: a task always names its owner. */
-  readonly ownership: TaskOwnership
+  ownership: TaskOwnership,
   /**
    * Default: the owner task's conversation, or the transaction's bound conversation; required
    * for conversation-owned tasks created by commits that are not bound to a conversation.
    */
-  readonly conversationId?: ConversationId
+  conversationId: Schema.optionalKey(ConversationId),
   /** Conversation-owned tasks only: excluded from idle waits, conversation aborts, and cascades. */
-  readonly background?: boolean
+  background: Schema.optionalKey(Schema.Boolean),
   /** Its creator awaits it only in memory, so a later Harness abort-marks it with `restart`. */
-  readonly abandonOnRestart?: boolean
-}
+  abandonOnRestart: Schema.optionalKey(Schema.Boolean),
+})
+export type TaskOptions = typeof TaskOptions.Type
 
 /**
  * What `Tx.createTask()` needs of a task definition: its persisted kind and version, and the
@@ -66,64 +74,82 @@ export interface TaskKind<I extends Schema.Json> {
 }
 
 /** Entry content supplied before the Session assigns identity and task attribution. */
-export type EntryDraft = Omit<EntryRecord, 'id' | 'conversationId' | 'byTaskId' | 'head'> & {
+export const EntryDraft = Schema.Struct({
+  kind: EntryRecord.fields.kind,
+  model: EntryRecord.fields.model,
+  data: EntryRecord.fields.data,
+  edits: EntryRecord.fields.edits,
   /** `'self'` starts active context at the newly assigned entry ID. */
-  readonly head?: EntryId | 'self'
-}
+  head: Schema.optionalKey(Schema.Union([EntryId, Schema.Literal('self')])),
+})
+export type EntryDraft = typeof EntryDraft.Type
 
 /** Terminal status staged for a submission; identity, type, and entry come from its record. */
-export type SubmissionSettlement =
-  | { readonly status: 'done'; readonly answer: EntryId }
-  | { readonly status: 'unanswered'; readonly reason: string; readonly detail?: Schema.Json }
+export const SubmissionSettlement = Schema.Union([
+  Schema.Struct({ status: Schema.Literal('done'), answer: EntryId }),
+  Schema.Struct({
+    status: Schema.Literal('unanswered'),
+    reason: Schema.String,
+    detail: Schema.optionalKey(Schema.Json),
+  }),
+])
+export type SubmissionSettlement = typeof SubmissionSettlement.Type
 
 /** Defaults a commit binds to, as the task runtime's own commits do. */
-export interface TransactionScope {
+export const TransactionScope = Schema.Struct({
   /** Default `Tx.createTask()` conversation. */
-  readonly conversationId?: ConversationId
+  conversationId: Schema.optionalKey(ConversationId),
   /** Task whose runtime commit this is; stamped as `byTaskId` on appended entries. */
-  readonly taskId?: TaskId
-}
+  taskId: Schema.optionalKey(TaskId),
+})
+export type TransactionScope = typeof TransactionScope.Type
 
 /** Committed change of one document incarnation. */
-export type DocumentCommitChange =
-  | {
-      readonly type: 'document'
-      readonly record: DocumentRecord
-      /** Conversation owning the document; task documents take their task's. */
-      readonly conversationId: ConversationId | undefined
-      /** Definition version of `value`; absent when this commit retired the incarnation. */
-      readonly version: number | undefined
-      /** Adopted revision, or `null` when this commit retired the incarnation. */
-      readonly value: Schema.JsonObject | null
-      /** Adopted operations of an ordinary update; empty for creation and retirement. */
-      readonly ops: ReadonlyArray<Op>
-    }
-  | {
-      /** Definition-free child initialization of a fork. */
-      readonly type: 'document.copy'
-      readonly record: DocumentRecord
-      readonly conversationId: ConversationId
-      readonly source: DocumentCopySource
-    }
+export const DocumentCommitChange = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal('document'),
+    record: DocumentRecord,
+    /** Conversation owning the document; task documents take their task's. */
+    conversationId: Schema.UndefinedOr(ConversationId),
+    /** Definition version of `value`; absent when this commit retired the incarnation. */
+    version: Schema.UndefinedOr(Schema.Int),
+    /** Adopted revision, or `null` when this commit retired the incarnation. */
+    value: Schema.NullOr(JsonObject),
+    /** Adopted operations of an ordinary update; empty for creation and retirement. */
+    ops: Schema.Array(Op),
+  }),
+  Schema.Struct({
+    /** Definition-free child initialization of a fork. */
+    type: Schema.Literal('document.copy'),
+    record: DocumentRecord,
+    conversationId: ConversationId,
+    source: DocumentCopySource,
+  }),
+])
+export type DocumentCommitChange = typeof DocumentCommitChange.Type
 
 /** A complete table record, published as the write that committed it. */
-export type TableCommitChange = Extract<
-  StorageWrite,
-  { readonly type: 'conversation' | 'entry' | 'task' | 'submission' }
->
+export const TableCommitChange = Schema.Union([
+  Schema.Struct({ type: Schema.Literal('conversation'), value: ConversationRecord }),
+  Schema.Struct({ type: Schema.Literal('entry'), value: EntryRecord }),
+  Schema.Struct({ type: Schema.Literal('task'), value: TaskRecord }),
+  Schema.Struct({ type: Schema.Literal('submission'), value: SubmissionRecord }),
+])
+export type TableCommitChange = typeof TableCommitChange.Type
 
-export type CommitChange = TableCommitChange | DocumentCommitChange
+export const CommitChange = Schema.Union([TableCommitChange, DocumentCommitChange])
+export type CommitChange = typeof CommitChange.Type
 
 /** Every change of one successful commit. Change order is unspecified. */
-export interface CommitPublication {
-  readonly seq: Seq
-  readonly changes: ReadonlyArray<CommitChange>
-}
+export const CommitPublication = Schema.Struct({ seq: Seq, changes: Schema.Array(CommitChange) })
+export type CommitPublication = typeof CommitPublication.Type
 
 /** Why a Session ended: its scope closed, or Storage failed it with `error`. */
-export type SessionEnd =
-  | { readonly reason: 'closed' }
-  | { readonly reason: 'failed'; readonly error: StorageError }
+export const SessionEnd = Schema.Union([
+  Schema.Struct({ reason: Schema.Literal('closed') }),
+  Schema.Struct({ reason: Schema.Literal('failed'), error: StorageError }),
+])
+export type SessionEnd = typeof SessionEnd.Type
 
 /** How a `Tx` operation fails: a rejected operation, or a failed Session. */
 export type TxError = TransactionError | SessionFailed

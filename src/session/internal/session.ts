@@ -16,6 +16,8 @@ import { SessionClosed, SessionFailed } from '../SessionError.ts'
 import * as Cache from './cache.ts'
 import type { AnyToken } from './documents.ts'
 import { addressId } from './documents.ts'
+import { observe } from './observe.ts'
+import * as Observers from './observers.ts'
 import { snapshot, snapshotAsOf } from './snapshots.ts'
 import type { OnLine } from './snapshots.ts'
 import { abandon, discard, makeTransaction, settle } from './transaction.ts'
@@ -51,25 +53,28 @@ const healthy = (lifecycle: Lifecycle): Effect.Effect<void, SessionFailed> =>
     Option.getOrElse(() => Effect.void),
   )
 
-/** Fail the Session with `error`; the first failure wins. */
-const fail = (lifecycle: Lifecycle, error: StorageError) =>
-  Effect.andThen(
+/** Fail the Session with `error`, and end its observers; the first failure wins. */
+const fail = (lifecycle: Lifecycle, observers: Observers.Observers, error: StorageError) => {
+  const failure = failed(error)
+  return Effect.andThen(
     Effect.all([
-      Deferred.fail(lifecycle.failure, failed(error)),
+      Deferred.fail(lifecycle.failure, failure),
       Deferred.succeed(lifecycle.ended, { reason: 'failed', error }),
+      observers.end(failure),
     ]),
     Deferred.await(lifecycle.failure),
   )
+}
 
 /** A `StorageRequestError` fails only its call; any other Storage failure fails the Session. */
 const guard =
-  (lifecycle: Lifecycle): Host['guard'] =>
+  (lifecycle: Lifecycle, observers: Observers.Observers): Host['guard'] =>
   <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, Guarded<E>> => {
     const isStorageError = (error: E): error is Extract<E, StorageError> =>
       error instanceof StorageError
     return Effect.flatMap(healthy(lifecycle), () =>
       effect.pipe(
-        Effect.catchIf(isStorageError, (error) => fail(lifecycle, error)),
+        Effect.catchIf(isStorageError, (error) => fail(lifecycle, observers, error)),
         Effect.tap(() => healthy(lifecycle)),
       ),
     )
@@ -80,6 +85,7 @@ const closed = new SessionClosed({ message: 'Session is closed' })
 /** Persist an assembled batch, adopt its document changes, and publish it. */
 const persist = (
   host: Host,
+  observers: Observers.Observers,
   pubsub: PubSub.PubSub<CommitPublication>,
   transaction: ReturnType<typeof makeTransaction>,
   assembly: Effect.Success<ReturnType<typeof settle>>,
@@ -92,6 +98,7 @@ const persist = (
       Effect.gen(function* () {
         const documents = yield* adopt(host.cache, assembly.plans, seq)
         for (const { record } of documents) yield* host.cache.touch(addressId(record))
+        yield* observers.publish(documents)
         yield* PubSub.publish(pubsub, publication(assembly, documents, seq))
       }),
   )
@@ -99,6 +106,7 @@ const persist = (
 const runCommit = Effect.fnUntraced(function* <A, E, R>(
   lifecycle: Lifecycle,
   host: Host,
+  observers: Observers.Observers,
   pubsub: PubSub.PubSub<CommitPublication>,
   change: (tx: Tx) => Effect.Effect<A, E, R>,
   scope: TransactionScope | undefined,
@@ -118,7 +126,7 @@ const runCommit = Effect.fnUntraced(function* <A, E, R>(
     return result
   }
   // Once admitted, interruption waits for Storage to settle and the commit to publish.
-  yield* Effect.uninterruptible(persist(host, pubsub, transaction, assembly))
+  yield* Effect.uninterruptible(persist(host, observers, pubsub, transaction, assembly))
   return result
 })
 
@@ -141,10 +149,13 @@ const close = (
   lifecycle: Lifecycle,
   line: Semaphore.Semaphore,
   cache: Cache.Cache,
+  observers: Observers.Observers,
   pubsub: PubSub.PubSub<CommitPublication>,
 ) =>
   Effect.gen(function* () {
     yield* Deferred.done(lifecycle.closing, Exit.void)
+    // Observers end before admitted commits settle: they see nothing committed while closing.
+    yield* observers.end()
     // Admitted commits settle before the Session, and then its Storage, closes.
     yield* Semaphore.withPermit(
       line,
@@ -152,6 +163,33 @@ const close = (
     )
     yield* PubSub.shutdown(pubsub)
   })
+
+/** The Session's committed document reads and observations. */
+const documentReads = (
+  host: Host,
+  observers: Observers.Observers,
+  usable: Effect.Effect<void, SessionClosed | SessionFailed>,
+  onLine: OnLine,
+): Pick<Service, 'snapshot' | 'snapshotAsOf' | 'watchDoc' | 'documentState'> => {
+  const { cache } = host
+  return {
+    // Overload resolution ends here: past it, tokens and values are untyped JSON.
+    snapshot: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) =>
+      snapshot(cache, usable, onLine, token, args),
+    ),
+    snapshotAsOf: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) =>
+      snapshotAsOf(host, onLine, token, args),
+    ),
+    watchDoc: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) =>
+      observe(cache, observers, onLine, token, args, Observers.makeWatch),
+    ),
+    documentState: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) =>
+      observe(cache, observers, onLine, token, args, (value, version, release) =>
+        Effect.succeed(Observers.makeState(value, version, release)),
+      ),
+    ),
+  }
+}
 
 export const make = (options: Options): Effect.Effect<Service, never, Storage | Scope.Scope> =>
   Effect.gen(function* () {
@@ -165,9 +203,11 @@ export const make = (options: Options): Effect.Effect<Service, never, Storage | 
     }
     const retention = retentionMillis(options.documentRetention)
     const scope = yield* Effect.scope
-    const cache = Cache.make({ storage, guard: guard(lifecycle), retention, line, scope })
-    const host: Host = { storage, guard: guard(lifecycle), cache }
-    yield* Effect.addFinalizer(() => close(lifecycle, line, cache, pubsub))
+    const observers = Observers.make()
+    const guarded = guard(lifecycle, observers)
+    const cache = Cache.make({ storage, guard: guarded, retention, line, scope })
+    const host: Host = { storage, guard: guarded, cache }
+    yield* Effect.addFinalizer(() => close(lifecycle, line, cache, observers, pubsub))
     const usable = Effect.suspend((): Effect.Effect<void, SessionClosed | SessionFailed> =>
       Deferred.isDoneUnsafe(lifecycle.closing) ? Effect.fail(closed) : healthy(lifecycle),
     )
@@ -183,16 +223,10 @@ export const make = (options: Options): Effect.Effect<Service, never, Storage | 
       )
     const service: Service = {
       commit: (change, transactionScope) =>
-        onLine(runCommit(lifecycle, host, pubsub, change, transactionScope)),
+        onLine(runCommit(lifecycle, host, observers, pubsub, change, transactionScope)),
       subscribe: PubSub.subscribe(pubsub),
       ended: Deferred.await(lifecycle.ended),
-      // Overload resolution ends here: past it, tokens and values are untyped JSON.
-      snapshot: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) =>
-        snapshot(cache, usable, onLine, token, args),
-      ),
-      snapshotAsOf: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) =>
-        snapshotAsOf(host, onLine, token, args),
-      ),
+      ...documentReads(host, observers, usable, onLine),
       unloadDocuments: onLine(cache.clear),
     }
     return service

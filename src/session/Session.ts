@@ -23,6 +23,7 @@ import type { SubmissionCreate } from '../storage/schema/Submission.ts'
 import { TaskRecord } from '../storage/schema/Task.ts'
 import * as Document from './Document.ts'
 import * as internal from './internal/session.ts'
+import type * as Observation from './Observation.ts'
 import type {
   DocumentError,
   ReadAfterWrite,
@@ -258,6 +259,8 @@ export interface Service {
   readonly ended: Effect.Effect<SessionEnd>
   readonly snapshot: Document.Snapshot
   readonly snapshotAsOf: Document.SnapshotAsOf
+  readonly watchDoc: Observation.WatchDoc
+  readonly documentState: Observation.DocumentState
   /** Drop every loaded document tracker; later access loads from Storage. */
   readonly unloadDocuments: Effect.Effect<void, SessionClosed | SessionFailed>
 }

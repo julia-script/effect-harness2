@@ -158,3 +158,12 @@ export const setTask = Effect.fnUntraced(function* (state: TxState, value: TaskR
   task.write = { kind: task.write?.kind === 'create' ? 'create' : 'replace', record }
   return record
 })
+
+/** Every task candidate the transaction staged, in staging order. */
+export const stagedTasks = (state: TxState): ReadonlyArray<TaskRecord> => {
+  const records: Array<TaskRecord> = []
+  for (const task of state.tasks.values()) {
+    if (task.write !== undefined) records.push(task.write.record)
+  }
+  return records
+}

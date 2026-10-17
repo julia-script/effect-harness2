@@ -1,9 +1,10 @@
 /**
- * The `Storage` service: the Session's atomic persistence boundary, and its in-memory and JSONL
- * layers.
+ * The `Storage` service: the Session's atomic persistence boundary, and its in-memory, JSONL, and
+ * SQL layers.
  */
 import { Context, Layer } from 'effect'
 import type { Effect, FileSystem, Path, Scope } from 'effect'
+import type { SqlClient } from 'effect/sql'
 import type { StorageRequestError } from './StorageError.ts'
 import type { ConversationRecord } from './schema/Conversation.ts'
 import type {
@@ -35,6 +36,7 @@ import type { TaskRecord } from './schema/Task.ts'
 import type { StorageWrite } from './schema/Write.ts'
 import * as jsonl from './internal/jsonlStorage.ts'
 import * as internal from './internal/memoryStorage.ts'
+import * as sql from './internal/sqlStorage.ts'
 import type { StorageError } from './StorageError.ts'
 
 /** Any ID from the Session-global numeric namespace. */
@@ -206,3 +208,32 @@ export const layerJsonl = (
   options?: JsonlOptions,
 ): Layer.Layer<Storage, StorageError, FileSystem.FileSystem | Path.Path> =>
   Layer.effect(Storage, makeJsonl(directory, options))
+
+/** Options for a SQL store. */
+export interface SqlOptions {
+  /**
+   * Prefix for every table and index the store creates, so several stores, or other tables, can
+   * share one database. It must be a plain SQL identifier and must not start with `sqlite_` or
+   * `pg_`. Existing data is not migrated when it changes. Defaults to none, as in pi.
+   */
+  readonly prefix?: string
+}
+
+/**
+ * Open a SQL store, ported from pi's `storage/sqlite/storage.ts`, on the `SqlClient` in context:
+ * any Effect SQL driver whose dialect is SQLite or PostgreSQL, such as `@effect/sql-sqlite-node`,
+ * `@effect/sql-sqlite-bun`, `@effect/sql-pg`, or `@effect/sql-pglite`. Creates or migrates the
+ * tables with Effect's `Migrator`, and fails with a `StorageError` for another dialect.
+ *
+ * Each commit is one transaction. The owning Session must be the only writer of the store's
+ * tables. Closing the scope closes the store, not the client.
+ */
+export const makeSql: (
+  options?: SqlOptions,
+) => Effect.Effect<Service, StorageError, SqlClient.SqlClient | Scope.Scope> = sql.makeSql
+
+/** A `Storage` kept in the tables of the `SqlClient` provided to the layer. */
+export const layerSql = (
+  options?: SqlOptions,
+): Layer.Layer<Storage, StorageError, SqlClient.SqlClient> =>
+  Layer.effect(Storage, makeSql(options))

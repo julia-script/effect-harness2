@@ -25,7 +25,10 @@
         "src/storage/Storage.ts",
         "src/storage/internal/jsonlStorage.ts",
         "src/storage/internal/jsonl/**",
-        "src/storage/test/jsonl/**"
+        "src/storage/test/jsonl/**",
+        "src/storage/internal/sqlStorage.ts",
+        "src/storage/internal/sql/**",
+        "src/storage/test/sql/**"
       ],
       "rules": {
         "effecttsgo/unstable-api-usage": "off"

@@ -17,6 +17,10 @@
     "./storage/schema": {
       "types": "./dist/storage/schema/index.d.ts",
       "default": "./dist/storage/schema/index.js"
+    },
+    "./session": {
+      "types": "./dist/session/index.d.ts",
+      "default": "./dist/session/index.js"
     }
   },
   "scripts": {

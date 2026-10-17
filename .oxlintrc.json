@@ -13,7 +13,8 @@
     "denyWarnings": true
   },
   "rules": {
-    "no-nested-ternary": "error"
+    "no-nested-ternary": "error",
+    "no-redeclare": "off"
   },
   "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"]
 }

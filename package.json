@@ -19,7 +19,8 @@
     "prepare": "effect-tsgo patch --oxlint",
     "build": "tsc",
     "dev": "tsc --watch --preserveWatchOutput",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src"
   },
   "dependencies": {
     "effect": "4.0.5"

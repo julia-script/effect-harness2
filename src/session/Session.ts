@@ -6,8 +6,9 @@ import { Context, Layer, Schema } from 'effect'
 import type { Duration, Effect, PubSub, Scope } from 'effect'
 import type { Storage } from '../storage/Storage.ts'
 import { StorageError } from '../storage/StorageError.ts'
-import type { StorageRequestError } from '../storage/StorageError.ts'
+import * as Conversation from '../storage/schema/Conversation.ts'
 import { ConversationRecord } from '../storage/schema/Conversation.ts'
+import * as Entry from '../storage/schema/Entry.ts'
 import { EntryRecord } from '../storage/schema/Entry.ts'
 import { ConversationId, EntryId, Seq, TaskId } from '../storage/schema/Ids.ts'
 import type { SubmissionId } from '../storage/schema/Ids.ts'
@@ -25,19 +26,17 @@ import * as Document from './Document.ts'
 import * as internal from './internal/session.ts'
 import type * as Observation from './Observation.ts'
 import type {
-  DocumentError,
-  ReadAfterWrite,
+  CommitError,
   SessionClosed,
   SessionFailed,
-  TransactionError,
+  TxDocumentError,
+  TxError,
+  TxReadError,
 } from './SessionError.ts'
 
 /** Ownership selected explicitly whenever a conversation is created. */
-export const ConversationOwnership = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal('ownerless') }),
-  Schema.Struct({ kind: Schema.Literal('task'), taskId: TaskId }),
-])
-export type ConversationOwnership = typeof ConversationOwnership.Type
+export const ConversationOwnership = Conversation.ConversationOwnership
+export type ConversationOwnership = Conversation.ConversationOwnership
 
 /** Who owns a task: its conversation, or another task of the same conversation. */
 export const TaskOwnership = Schema.Union([
@@ -75,15 +74,8 @@ export interface TaskKind<I extends Schema.Json> {
 }
 
 /** Entry content supplied before the Session assigns identity and task attribution. */
-export const EntryDraft = Schema.Struct({
-  kind: EntryRecord.fields.kind,
-  model: EntryRecord.fields.model,
-  data: EntryRecord.fields.data,
-  edits: EntryRecord.fields.edits,
-  /** `'self'` starts active context at the newly assigned entry ID. */
-  head: Schema.optionalKey(Schema.Union([EntryId, Schema.Literal('self')])),
-})
-export type EntryDraft = typeof EntryDraft.Type
+export const EntryDraft = Entry.EntryDraft
+export type EntryDraft = Entry.EntryDraft
 
 /** Terminal status staged for a submission; identity, type, and entry come from its record. */
 export const SubmissionSettlement = Schema.Union([
@@ -132,21 +124,6 @@ export const SessionEnd = Schema.Union([
 ])
 export type SessionEnd = typeof SessionEnd.Type
 
-/** How a `Tx` operation fails. */
-export type TxError = TransactionError | SessionFailed
-
-/** How a `Tx` table read fails. */
-export type TxReadError = TxError | ReadAfterWrite | StorageRequestError
-
-/** How a `Tx` document operation fails. */
-export type TxDocumentError = TxError | DocumentError | StorageRequestError
-
-/** How a commit fails besides its callback's own errors. */
-export type CommitError = TxError | DocumentError | SessionClosed | StorageRequestError
-
-/** How a committed document read fails. */
-export type SnapshotError = DocumentError | SessionFailed | SessionClosed | StorageRequestError
-
 /**
  * The transaction of one commit callback. Reads see committed state only, and only before the
  * transaction's first table write (`ReadAfterWrite`). Records it returns are immutable and are
@@ -188,15 +165,15 @@ export interface Tx {
   /** Create a conversation with explicitly selected ownership. */
   readonly createConversation: (options: {
     readonly ownership: ConversationOwnership
-  }) => Effect.Effect<ConversationRecord, TxError | StorageRequestError>
+  }) => Effect.Effect<ConversationRecord, TxDocumentError>
   /** Create the root conversation at its reserved ID, as a Harness does once. */
-  readonly createRootConversation: Effect.Effect<ConversationRecord, TxError | StorageRequestError>
+  readonly createRootConversation: Effect.Effect<ConversationRecord, TxDocumentError>
   /** Fork history at one visible entry; `asOf` documents copy as of it, `current` ones as now. */
   readonly forkConversation: (
     parentConversationId: ConversationId,
     at: EntryId,
     options: { readonly ownership: ConversationOwnership },
-  ) => Effect.Effect<ConversationRecord, TxError | StorageRequestError>
+  ) => Effect.Effect<ConversationRecord, TxDocumentError>
   readonly appendEntry: (
     conversationId: ConversationId,
     draft: EntryDraft,
@@ -271,8 +248,19 @@ export interface Service {
   readonly unloadDocuments: Effect.Effect<void, SessionClosed | SessionFailed>
 }
 
+/**
+ * Runs in every transaction that creates or forks a conversation, right after the conversation
+ * record is staged, so a Harness can stage its built-in documents there. The record is already a
+ * table write: table reads fail with `ReadAfterWrite`. A failure fails the creating operation.
+ */
+export type ConversationCreated = (
+  tx: Tx,
+  record: ConversationRecord,
+) => Effect.Effect<void, TxDocumentError>
+
 /** How a Session runs. */
 export interface Options {
+  readonly conversationCreated?: ConversationCreated
   /**
    * How long a loaded document stays cached after its last use. Default: ten minutes. `0` evicts
    * right after use; `Infinity` keeps documents for the Session's lifetime.

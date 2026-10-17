@@ -1,11 +1,13 @@
 /* oxlint-disable effecttsgo/any-unknown-in-error-context -- task code may fail with anything, and a failure of any type faults its task */
 import { Cause, Deferred, Effect, Exit, Option } from 'effect'
 import { cast } from 'effect/Function'
-import type { Tx, TxError } from '../../session/Session.ts'
-import type { TaskOutcome, TaskRecord } from '../../storage/schema/Task.ts'
+import type { Tx } from '../../session/Session.ts'
+import type { TxError } from '../../session/SessionError.ts'
+import type { TaskRecord } from '../../storage/schema/Task.ts'
+import type { SchedulerOutcome } from '../Scheduler.ts'
 import type { Snapshot } from '../Registry.ts'
 import type * as Task from '../Task.ts'
-import { loadScopes, scheduleReconcile } from './chains.ts'
+import { loadScopes, scheduleReconcile, settleOutcome } from './chains.ts'
 import { canReserve } from './resolve.ts'
 import { makeRuntime } from './runtime.ts'
 import { jsonEqual } from './json.ts'
@@ -38,9 +40,6 @@ interface Run {
   reported: { readonly task: Erased | undefined } | undefined
 }
 
-/** Terminal outcomes the scheduler writes without running task code. */
-export type SchedulerOutcome = Extract<TaskOutcome, { readonly status: 'faulted' | 'orphaned' }>
-
 /**
  * Write an outcome the scheduler decided. While the task's ordinary owned work is live it holds as
  * `completing` (spec §5.5); otherwise it is terminal.
@@ -54,6 +53,7 @@ export const terminate = Effect.fnUntraced(function* (
   yield* loadScopes(state)
   const holds = hasOwnedLive(state, record.id, yield* overlayOf(tx))
   yield* tx.setTask(withState(record, { status: holds ? 'completing' : 'terminal', outcome }))
+  if (!holds) yield* settleOutcome(state, tx, record, outcome)
 })
 
 const checkpointOf = (record: TaskRecord): Task.Checkpoint =>

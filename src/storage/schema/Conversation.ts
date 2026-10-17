@@ -10,3 +10,10 @@ export const ConversationRecord = Schema.Struct({
   owner: Schema.optionalKey(Schema.Struct({ conversationId: ConversationId, taskId: TaskId })),
 })
 export type ConversationRecord = typeof ConversationRecord.Type
+
+/** Ownership selected explicitly whenever a conversation is created. */
+export const ConversationOwnership = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal('ownerless') }),
+  Schema.Struct({ kind: Schema.Literal('task'), taskId: TaskId }),
+])
+export type ConversationOwnership = typeof ConversationOwnership.Type

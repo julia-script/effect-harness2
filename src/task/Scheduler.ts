@@ -24,52 +24,31 @@
  * cascade, idle wait, or conversation abort reaches them or below them. A task created with
  * `abandonOnRestart` is abort-marked with reason `restart` by the next Scheduler.
  *
- * Not ported yet: withdrawing queued inputs below cancelled owners, which comes with the inbox.
+ * Conversation aborts and cascades also withdraw queued inputs, through the `withdrawInputs`
+ * hook, of every conversation they reach: the inbox belongs to the Harness.
  */
-import { Context, Layer, Schema } from 'effect'
+import { Context, Layer } from 'effect'
 import type { Effect, Scope } from 'effect'
-import type { CommitError, Session } from '../session/Session.ts'
+import type { Session, Tx } from '../session/Session.ts'
+import type { CommitError, TxDocumentError } from '../session/SessionError.ts'
 import type { Storage } from '../storage/Storage.ts'
 import type { StorageError } from '../storage/StorageError.ts'
 import type { ConversationId } from '../storage/schema/Ids.ts'
 import { TaskId } from '../storage/schema/Ids.ts'
 import { TaskRecord } from '../storage/schema/Task.ts'
+import type { TaskOutcome } from '../storage/schema/Task.ts'
+import * as Inspections from './Inspection.ts'
 import * as internal from './internal/scheduler.ts'
 import type { Registry } from './Registry.ts'
 import type { TerminalTask } from './Task.ts'
 import type { SchedulerClosed, TaskNotFound } from './TaskError.ts'
 
-/** A live task's scheduling state, derived and never persisted. */
-export const TaskInspectionState = Schema.Union([
-  /** An invocation is active. */
-  Schema.Struct({ kind: Schema.Literal('running') }),
-  /** The next pass reserves it; `migrates` when its definition is newer and has `migrate`. */
-  Schema.Struct({ kind: Schema.Literal('ready'), migrates: Schema.Boolean }),
-  /**
-   * Waits for these live tasks: the live part of its `on`, or, when abort-marked, its live
-   * ordinary owned work, which must end before its abort handler starts.
-   */
-  Schema.Struct({ kind: Schema.Literal('waiting'), on: Schema.Array(TaskId) }),
-  /** Outcome held until its ordinary owned work drains. */
-  Schema.Struct({ kind: Schema.Literal('completing') }),
-  /** No installed definition can take it; aborting it settles it as `orphaned`. */
-  Schema.Struct({
-    kind: Schema.Literal('blocked'),
-    reason: Schema.Literals(['missing_task', 'task_too_old', 'migration_failed']),
-    message: Schema.optionalKey(Schema.String),
-  }),
-])
-export type TaskInspectionState = typeof TaskInspectionState.Type
-
-export const TaskInspection = Schema.Struct({ record: TaskRecord, state: TaskInspectionState })
-export type TaskInspection = typeof TaskInspection.Type
-
-/** Scheduling state and every live task, read on the Session line. */
-export const Inspection = Schema.Struct({
-  scheduling: Schema.Literals(['running', 'closing']),
-  tasks: Schema.Array(TaskInspection),
-})
-export type Inspection = typeof Inspection.Type
+export const TaskInspectionState = Inspections.TaskInspectionState
+export type TaskInspectionState = Inspections.TaskInspectionState
+export const TaskInspection = Inspections.TaskInspection
+export type TaskInspection = Inspections.TaskInspection
+export const Inspection = Inspections.Inspection
+export type Inspection = Inspections.Inspection
 
 export interface Service {
   /**
@@ -104,6 +83,30 @@ export interface Service {
   readonly inspect: Effect.Effect<Inspection, CommitError | StorageError>
 }
 
+/** Terminal outcomes the scheduler writes without running task code. */
+export type SchedulerOutcome = Extract<TaskOutcome, { readonly status: 'faulted' | 'orphaned' }>
+
+/** Harness hooks a Scheduler stages in its own commits. */
+export interface Options {
+  /**
+   * Cleanup for an outcome only the scheduler writes, `faulted` or `orphaned`, staged in the
+   * commit that makes it terminal. A failure fails that commit.
+   */
+  readonly settleOutcome?: (
+    tx: Tx,
+    record: TaskRecord,
+    outcome: SchedulerOutcome,
+  ) => Effect.Effect<void, TxDocumentError>
+  /**
+   * Withdraw a conversation's queued inputs, in the commit of a conversation abort or an abort
+   * cascade that reaches it.
+   */
+  readonly withdrawInputs?: (
+    tx: Tx,
+    conversationId: ConversationId,
+  ) => Effect.Effect<void, TxDocumentError>
+}
+
 export class Scheduler extends Context.Service<Scheduler, Service>()(
   'effect-harness/task/Scheduler',
 ) {}
@@ -112,9 +115,21 @@ export class Scheduler extends Context.Service<Scheduler, Service>()(
  * Open a Scheduler over the Session and Registry in context and start scheduling. It reads
  * committed records from the Session's `Storage` on the line. Closing the scope stops it.
  */
+export const makeWith: (
+  options: Options,
+) => Effect.Effect<Service, CommitError, Session | Storage | Registry | Scope.Scope> = internal.make
+
+/** `makeWith` without hooks. */
 export const make: Effect.Effect<Service, CommitError, Session | Storage | Registry | Scope.Scope> =
-  internal.make
+  makeWith({})
 
 /** A `Scheduler` over the provided Session, its Storage, and a Registry. */
-export const layer: Layer.Layer<Scheduler, CommitError, Session | Storage | Registry> =
-  Layer.effect(Scheduler, make)
+export const layerWith = (
+  options: Options,
+): Layer.Layer<Scheduler, CommitError, Session | Storage | Registry> =>
+  Layer.effect(Scheduler, makeWith(options))
+
+/** `layerWith` without hooks. */
+export const layer: Layer.Layer<Scheduler, CommitError, Session | Storage | Registry> = layerWith(
+  {},
+)

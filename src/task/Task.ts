@@ -21,7 +21,8 @@ import type {
   TaskOutcomeError,
   TaskRecord,
 } from '../storage/schema/Task.ts'
-import type { CommitError, Service as SessionService, Tx, TxReadError } from '../session/Session.ts'
+import type { Service as SessionService, Tx } from '../session/Session.ts'
+import type { CommitError, TxReadError } from '../session/SessionError.ts'
 import type { StorageError } from '../storage/StorageError.ts'
 import type { InvocationEnded, SchedulerClosed, TaskNotFound, TaskRejected } from './TaskError.ts'
 

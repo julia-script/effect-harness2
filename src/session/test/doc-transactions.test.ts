@@ -232,7 +232,7 @@ const setupLive = (harness: Harness) =>
     return conversationId
   })
 
-type PendingLive = Fiber.Fiber<Tracker.Draft<Live>, Session.TxDocumentError>
+type PendingLive = Fiber.Fiber<Tracker.Draft<Live>, SessionError.TxDocumentError>
 
 /** Let forked fibers and pending Storage calls run. */
 const flush = Effect.sleep('5 millis')
@@ -573,7 +573,7 @@ describe('Session document transactions', () => {
         })
         const gate = yield* harness.holdFindDocument
         const mints = harness.counts.mints
-        let pending: Fiber.Fiber<Tracker.Draft<Counter>, Session.TxDocumentError> | undefined
+        let pending: Fiber.Fiber<Tracker.Draft<Counter>, SessionError.TxDocumentError> | undefined
         const commit = yield* Effect.forkChild(
           session.commit((tx) =>
             Effect.gen(function* () {

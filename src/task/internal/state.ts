@@ -7,6 +7,7 @@ import type { Service as StorageService } from '../../storage/Storage.ts'
 import type { ConversationId, TaskId } from '../../storage/schema/Ids.ts'
 import type { TaskRecord, TaskState } from '../../storage/schema/Task.ts'
 import type { Service as RegistryService, Snapshot } from '../Registry.ts'
+import type { Options } from '../Scheduler.ts'
 import type * as Task from '../Task.ts'
 import { ReadAfterWrite } from '../../session/SessionError.ts'
 import { SchedulerClosed } from '../TaskError.ts'
@@ -48,6 +49,7 @@ export interface State {
   /** Committed reads on the line inside a commit, after its table writes. */
   readonly storage: StorageService
   readonly registry: RegistryService
+  readonly options: Options
   /** Where invocation fibers run; closing it interrupts them. */
   readonly scope: Scope.Closeable
   readonly live: Map<TaskId, TaskRecord>
@@ -81,6 +83,8 @@ export interface State {
   readonly reconcileWake: Latch.Latch
   /** Opened to request a sweep of the ownership index. */
   readonly sweepWake: Latch.Latch
+  /** Whether the next reconcile withdraws queued inputs below owners with cancellation intent. */
+  withdrawPending: boolean
   closing: boolean
 }
 
@@ -88,11 +92,13 @@ export const makeState = (
   session: SessionService,
   storage: StorageService,
   registry: RegistryService,
+  options: Options,
   scope: Scope.Closeable,
 ): State => ({
   session,
   storage,
   registry,
+  options,
   scope,
   live: new Map(),
   invocations: new Map(),
@@ -109,6 +115,7 @@ export const makeState = (
   wake: Latch.makeUnsafe(false),
   reconcileWake: Latch.makeUnsafe(false),
   sweepWake: Latch.makeUnsafe(false),
+  withdrawPending: false,
   closing: false,
 })
 

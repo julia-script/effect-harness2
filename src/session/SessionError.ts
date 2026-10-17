@@ -2,6 +2,7 @@
  * Errors a `Session` reports.
  */
 import { Schema } from 'effect'
+import type { StorageRequestError } from '../storage/StorageError.ts'
 
 /**
  * The Session failed, so nothing runs or commits any more. It fails on the first `StorageError`
@@ -60,3 +61,18 @@ export class DocumentError extends Schema.TaggedError<
 >('effect-harness/session/SessionError/DocumentError')('DocumentError', {
   message: Schema.String,
 }) {}
+
+/** How a `Tx` operation fails. */
+export type TxError = TransactionError | SessionFailed
+
+/** How a `Tx` table read fails. */
+export type TxReadError = TxError | ReadAfterWrite | StorageRequestError
+
+/** How a `Tx` document operation fails. */
+export type TxDocumentError = TxError | DocumentError | StorageRequestError
+
+/** How a commit fails besides its callback's own errors. */
+export type CommitError = TxError | DocumentError | SessionClosed | StorageRequestError
+
+/** How a committed document read fails. */
+export type SnapshotError = DocumentError | SessionFailed | SessionClosed | StorageRequestError

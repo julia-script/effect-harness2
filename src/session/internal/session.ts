@@ -243,7 +243,12 @@ export const make = (options: Options): Effect.Effect<Service, never, Storage | 
     const observers = Observers.make()
     const guarded = guard(lifecycle, observers)
     const cache = Cache.make({ storage, guard: guarded, retention, line, scope })
-    const host: Host = { storage, guard: guarded, cache }
+    const host: Host = {
+      storage,
+      guard: guarded,
+      cache,
+      conversationCreated: options.conversationCreated,
+    }
     yield* Effect.addFinalizer(() => close(lifecycle, line, cache, observers, pubsub))
     const usable = Effect.suspend((): Effect.Effect<void, SessionClosed | SessionFailed> =>
       Deferred.isDoneUnsafe(lifecycle.closing) ? Effect.fail(closed) : healthy(lifecycle),

@@ -36,3 +36,14 @@ export type EntryRecord = typeof EntryRecord.Type
 /** An entry together with the sequence of the commit that persisted it. */
 export const StoredEntry = Schema.Struct({ entry: EntryRecord, commitSeq: Seq })
 export type StoredEntry = typeof StoredEntry.Type
+
+/** Entry content supplied before the Session assigns identity and task attribution. */
+export const EntryDraft = Schema.Struct({
+  kind: EntryRecord.fields.kind,
+  model: EntryRecord.fields.model,
+  data: EntryRecord.fields.data,
+  edits: EntryRecord.fields.edits,
+  /** `'self'` starts active context at the newly assigned entry ID. */
+  head: Schema.optionalKey(Schema.Union([EntryId, Schema.Literal('self')])),
+})
+export type EntryDraft = typeof EntryDraft.Type

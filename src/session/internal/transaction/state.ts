@@ -23,6 +23,7 @@ import type { StorageWrite } from '../../../storage/schema/Write.ts'
 import type { SubmissionSettlement, TransactionScope } from '../../Session.ts'
 import { ReadAfterWrite, TransactionError } from '../../SessionError.ts'
 import type { DocumentError, SessionFailed } from '../../SessionError.ts'
+import type { ConversationCreated } from '../../Session.ts'
 import type { Cache, Loaded } from '../cache.ts'
 import type { AnyDefinition } from '../documents.ts'
 
@@ -35,6 +36,8 @@ export interface Host {
   /** Run a Storage call behind the Session's failure latch. */
   readonly guard: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, Guarded<E>>
   readonly cache: Cache
+  /** Stages what every new or forked conversation needs, in its creating transaction. */
+  readonly conversationCreated: ConversationCreated | undefined
 }
 
 /** Committed and candidate state of one task the transaction touched. */

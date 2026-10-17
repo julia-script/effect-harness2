@@ -3,13 +3,18 @@
  * line, also inside a commit callback after its writes, so they read Storage directly.
  */
 import { Effect } from 'effect'
+import type { Tx } from '../../session/Session.ts'
 import type { ConversationRecord } from '../../storage/schema/Conversation.ts'
-import type { TaskId } from '../../storage/schema/Ids.ts'
+import type { ConversationId, TaskId } from '../../storage/schema/Ids.ts'
+import type { Cursor } from '../../storage/schema/Scan.ts'
+import type { TaskOutcome, TaskRecord } from '../../storage/schema/Task.ts'
 import type { State } from './state.ts'
 import { nodeOf, parentOf, setEdge, settle } from './tree.ts'
 import type { TaskNode, Up } from './tree.ts'
 import { edgeOf } from './walk.ts'
 import type { Overlay } from './walk.ts'
+
+const SCAN_PAGE_SIZE = 256
 
 /** Request a reconcile pass, which applies what committed records imply. */
 export const scheduleReconcile = (state: State): void => {
@@ -69,3 +74,44 @@ export const loadScopes = Effect.fnUntraced(function* (state: State) {
     if (state.tree.unloaded.has(id)) yield* loadChain(state, { task: id })
   }
 })
+
+/**
+ * Load the owner chains of every conversation with queued inputs, and return those conversations.
+ * Inputs queued below an owner with cancellation intent are withdrawn with it.
+ */
+export const loadQueued = Effect.fnUntraced(function* (state: State) {
+  const conversations = new Set<ConversationId>()
+  let cursor: Cursor | undefined
+  do {
+    const page = yield* state.storage.scanSubmissions({ status: 'queued' }, SCAN_PAGE_SIZE, cursor)
+    for (const submission of page.items) {
+      if (submission.type === 'input') conversations.add(submission.conversationId)
+    }
+    cursor = page.next
+  } while (cursor !== undefined)
+  for (const id of conversations) yield* loadChain(state, { conversation: id })
+  return [...conversations]
+})
+
+/** Withdraw the queued inputs of each conversation `withdraws` selects, through the host hook. */
+export const withdrawInputs = Effect.fnUntraced(function* (
+  state: State,
+  tx: Tx,
+  conversations: ReadonlyArray<ConversationId>,
+  withdraws: (conversationId: ConversationId) => boolean,
+) {
+  const hook = state.options.withdrawInputs
+  if (hook === undefined) return
+  for (const id of conversations) if (withdraws(id)) yield* hook(tx, id)
+})
+
+/**
+ * Stage the host's cleanup for an outcome only the scheduler writes, `faulted` or `orphaned`, in
+ * the commit that makes it terminal.
+ */
+export const settleOutcome = (state: State, tx: Tx, record: TaskRecord, outcome: TaskOutcome) => {
+  const hook = state.options.settleOutcome
+  return hook !== undefined && (outcome.status === 'faulted' || outcome.status === 'orphaned')
+    ? hook(tx, record, outcome)
+    : Effect.void
+}

@@ -1,7 +1,7 @@
 /**
  * The reconcile pass: one commit that applies what committed records imply. It writes abort marks
- * below live owners with cancellation intent (spec §5.4), `failFast` marks (spec §5.5), and the
- * terminal record of every `completing` task whose ordinary owned work is gone. The durable records
+ * below live owners with cancellation intent (spec §5.4), `failFast` marks (spec §5.5), withdrawn
+ * queued inputs below those owners, and the terminal record of every `completing` task whose ordinary owned work is gone. The durable records
  * are the intent, so the pass also repairs whatever a crash left unapplied.
  */
 import { Cause, Effect } from 'effect'
@@ -9,12 +9,12 @@ import type { Latch } from 'effect'
 import type { Tx } from '../../session/Session.ts'
 import type { TaskId } from '../../storage/schema/Ids.ts'
 import type { TaskRecord } from '../../storage/schema/Task.ts'
-import { loadScopes } from './chains.ts'
+import { loadQueued, loadScopes, settleOutcome, withdrawInputs } from './chains.ts'
 import { settleIdle } from './idle.ts'
 import { report, seal, withAbortMark, withState } from './state.ts'
 import type { State } from './state.ts'
 import { failedOutcome, sweep } from './tree.ts'
-import { hasOwnedLive, nearestLiveAbove, overlayOf, walkDown } from './walk.ts'
+import { belowCancelled, hasOwnedLive, nearestLiveAbove, overlayOf, walkDown } from './walk.ts'
 
 type Reason = 'restart' | undefined
 
@@ -91,9 +91,9 @@ const finalize = Effect.fnUntraced(function* (state: State, tx: Tx) {
       const record = overlay.tasks.get(id) ?? state.live.get(id)
       if (record?.state.status !== 'completing' || done.has(id)) continue
       if (hasOwnedLive(state, id, overlay, done)) continue
-      const terminal = yield* tx.setTask(
-        withState(record, { status: 'terminal', outcome: record.state.outcome }),
-      )
+      const outcome = record.state.outcome
+      const terminal = yield* tx.setTask(withState(record, { status: 'terminal', outcome }))
+      yield* settleOutcome(state, tx, record, outcome)
       overlay.tasks.set(id, terminal)
       done.add(id)
       const holder = nearestLiveAbove(state, record, overlay)
@@ -108,11 +108,14 @@ const reconcile = (state: State) =>
   Effect.suspend(() => {
     const checks = [...state.failFastChecks]
     state.failFastChecks.clear()
+    const withdraw = state.withdrawPending
+    state.withdrawPending = false
     return state.session
       .commit((tx) =>
         Effect.gen(function* () {
           if (state.closing) return
           yield* loadScopes(state)
+          const queued = withdraw ? yield* loadQueued(state) : []
           const marks = new Map<TaskId, { record: TaskRecord; reason: Reason }>()
           const mark = collectMark(marks)
           cascadeMarks(state, mark)
@@ -120,6 +123,9 @@ const reconcile = (state: State) =>
           for (const { record, reason } of marks.values()) {
             yield* tx.setTask(withAbortMark(record, reason))
           }
+          yield* withdrawInputs(state, tx, queued, (id) =>
+            belowCancelled(state, { conversation: id }),
+          )
           yield* finalize(state, tx)
         }),
       )

@@ -1,18 +1,22 @@
 import { Effect } from 'effect'
+import { cast } from 'effect/Function'
 import type { TransactionScope, Tx } from '../Session.ts'
+import type { AnyToken } from './documents.ts'
 import { assemble } from './transaction/assemble.ts'
 import { stageConversation, stageFork, stageRootConversation } from './transaction/conversations.ts'
+import { abortChanges, doc, prepareChanges, retireDoc } from './transaction/documents.ts'
 import * as Records from './transaction/records.ts'
 import { committedTask, makeState, read, rejected, write } from './transaction/state.ts'
 import type { Host, TxState } from './transaction/state.ts'
 
 /**
- * Transaction of one commit callback, ported from pi's `session/transaction.ts` without its
- * document tracking.
+ * Transaction of one commit callback, ported from pi's `session/transaction.ts`.
  *
  * Conversation and entry writes stage eagerly; tasks and submissions are kept per ID as their
- * latest candidate. When the callback ends the transaction seals, and every later operation
- * fails; on success the staged writes are validated and assembled into one batch.
+ * latest candidate, and documents as open tracker changes. When the callback ends the transaction
+ * seals, and every later operation fails; on success every change is prepared and the staged
+ * writes are validated and assembled into one batch. Whenever the batch does not commit, every
+ * change is aborted.
  */
 export interface Transaction {
   readonly tx: Tx
@@ -57,6 +61,11 @@ const makeTx = (state: TxState): Tx => {
     settleSubmission: (id, settlement) => Records.settleSubmission(state, id, settlement),
     placeSubmission: (id, entry) => Records.placeSubmission(state, id, entry),
     setTask: (record) => Records.setTask(state, record),
+    // Overload resolution ends here: past it, tokens and drafts are untyped JSON.
+    doc: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) => doc(state, token, args)),
+    retireDoc: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) =>
+      retireDoc(state, token, args),
+    ),
   }
 }
 
@@ -71,10 +80,28 @@ export const seal = (transaction: Transaction) =>
     transaction.state.sealed = true
   })
 
-/** Seal after the callback succeeded, then validate and assemble the batch. */
-export const settle = (transaction: Transaction) =>
-  Effect.flatMap(seal(transaction), () =>
-    transaction.state.pending > 0
-      ? rejected('Session commit callback ended before its pending Tx operations')
-      : assemble(transaction.state),
+/** Abort every document change: the batch will not commit. */
+export const discard = (transaction: Transaction) => abortChanges(transaction.state)
+
+/**
+ * Seal and discard after the callback failed, then wait for its pending operations, so none
+ * outlives the commit's hold on the mutation line.
+ */
+export const abandon = (transaction: Transaction) =>
+  Effect.andThen(
+    Effect.andThen(seal(transaction), discard(transaction)),
+    transaction.state.drained.await,
   )
+
+/** Seal after the callback succeeded, prepare every change, and assemble the batch. */
+export const settle = (transaction: Transaction) => {
+  const { state } = transaction
+  return Effect.flatMap(seal(transaction), () =>
+    state.pending > 0
+      ? Effect.andThen(
+          abandon(transaction),
+          rejected('Session commit callback ended before its pending Tx operations'),
+        )
+      : Effect.andThen(prepareChanges(state), assemble(state)),
+  ).pipe(Effect.onError(() => discard(transaction)))
+}

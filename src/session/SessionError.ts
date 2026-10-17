@@ -48,3 +48,15 @@ export class TransactionError extends Schema.TaggedError<
 >('effect-harness/session/SessionError/TransactionError')('TransactionError', {
   message: Schema.String,
 }) {}
+
+/**
+ * A document access was refused: its token disagrees with the stored incarnation's scope,
+ * history, fork policy, or version, a value is not strict JSON, or a stored value cannot be read.
+ * Nothing of the transaction is committed, and the Session stays usable.
+ */
+export class DocumentError extends Schema.TaggedError<
+  DocumentError,
+  { readonly brand: unique symbol }
+>('effect-harness/session/SessionError/DocumentError')('DocumentError', {
+  message: Schema.String,
+}) {}

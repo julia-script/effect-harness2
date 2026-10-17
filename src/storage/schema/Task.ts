@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
-import { ConversationId, TaskId, Version } from './ids.ts'
-import { JsonObject } from './json.ts'
+import { ConversationId, TaskId, Version } from './Ids.ts'
+import { JsonObject } from './Json.ts'
 
 /** JSON-safe error snapshot persisted instead of a runtime error value. */
 export const TaskOutcomeError = Schema.Struct({

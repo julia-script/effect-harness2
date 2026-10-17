@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
-import { ConversationId, EntryId, Seq, TaskId } from './ids.ts'
-import { ModelMessage } from './json.ts'
+import { ConversationId, EntryId, Seq, TaskId } from './Ids.ts'
+import { ModelMessage } from './Json.ts'
 
 /** An immutable override of one visible entry's contribution to model context. */
 export const ContextEdit = Schema.Union([

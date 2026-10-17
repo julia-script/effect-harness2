@@ -14,7 +14,9 @@
   },
   "rules": {
     "no-nested-ternary": "error",
-    "no-redeclare": "off"
+    "no-redeclare": "off",
+    "typescript/prefer-readonly-parameter-types": "off",
+    "max-classes-per-file": "off"
   },
   "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"]
 }

@@ -1,5 +1,5 @@
 import { Schema } from 'effect'
-import { ConversationId, EntryId, SubmissionId } from './ids.ts'
+import { ConversationId, EntryId, SubmissionId } from './Ids.ts'
 
 const SubmissionCreateFields = {
   conversationId: ConversationId,

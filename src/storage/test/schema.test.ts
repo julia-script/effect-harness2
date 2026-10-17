@@ -1,21 +1,14 @@
 import { expect, test } from 'bun:test'
 import { Schema } from 'effect'
-import {
-  ConversationId,
-  DocumentRecord,
-  EntryRecord,
-  StorageWrite,
-  SubmissionRecord,
-  TaskRecord,
-} from './index.ts'
+import { Document, Entry, Ids, Submission, Task, Write } from '../schema/index.ts'
 
 const decode = <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S) =>
   Schema.decodeUnknownSync(schema)
 
 test('ids are positive integers', () => {
-  expect(decode(ConversationId)(1)).toBe(ConversationId.make(1))
-  expect(() => decode(ConversationId)(0)).toThrow()
-  expect(() => decode(ConversationId)(1.5)).toThrow()
+  expect(decode(Ids.ConversationId)(1)).toBe(Ids.ConversationId.make(1))
+  expect(() => decode(Ids.ConversationId)(0)).toThrow()
+  expect(() => decode(Ids.ConversationId)(1.5)).toThrow()
 })
 
 test('entries keep pi field names', () => {
@@ -26,19 +19,21 @@ test('entries keep pi field names', () => {
     model: [{ role: 'user', content: 'hi', timestamp: 0 }],
     edits: [{ target: 2, action: 'omit' }],
   }
-  expect(decode(EntryRecord)(entry) as unknown).toEqual(entry)
+  expect(decode(Entry.EntryRecord)(entry) as unknown).toEqual(entry)
 })
 
 test('submission status constrains its fields', () => {
   const base = { id: 4, conversationId: 1, type: 'input' }
-  expect(decode(SubmissionRecord)({ ...base, status: 'placed', entry: 3 }) as unknown).toEqual({
+  expect(
+    decode(Submission.SubmissionRecord)({ ...base, status: 'placed', entry: 3 }) as unknown,
+  ).toEqual({
     ...base,
     status: 'placed',
     entry: 3,
   })
-  expect(() => decode(SubmissionRecord)({ ...base, status: 'placed' })).toThrow()
+  expect(() => decode(Submission.SubmissionRecord)({ ...base, status: 'placed' })).toThrow()
   expect(() =>
-    decode(SubmissionRecord)({ ...base, type: 'write', status: 'placed', entry: 3 }),
+    decode(Submission.SubmissionRecord)({ ...base, type: 'write', status: 'placed', entry: 3 }),
   ).toThrow()
 })
 
@@ -53,9 +48,9 @@ test('settled tasks carry an outcome', () => {
     abortRequested: false,
     state: { status: 'terminal', outcome: { status: 'completed', result: { ok: true } } },
   }
-  expect(decode(TaskRecord)(task) as unknown).toEqual(task)
+  expect(decode(Task.TaskRecord)(task) as unknown).toEqual(task)
   expect(() =>
-    decode(TaskRecord)({ ...task, state: { status: 'terminal', checkpoint: {} } }),
+    decode(Task.TaskRecord)({ ...task, state: { status: 'terminal', checkpoint: {} } }),
   ).toThrow()
 })
 
@@ -63,7 +58,7 @@ test('only conversation documents declare history', () => {
   const record = { id: 6, kind: 'notes', createdAt: 1 }
   const conversation = { kind: 'conversation', conversationId: 1 }
   expect(
-    decode(DocumentRecord)({
+    decode(Document.DocumentRecord)({
       ...record,
       scope: conversation,
       history: 'rewindable',
@@ -71,7 +66,12 @@ test('only conversation documents declare history', () => {
     }) as unknown,
   ).toEqual({ ...record, scope: conversation, history: 'rewindable', fork: 'asOf' })
   expect(() =>
-    decode(DocumentRecord)({ ...record, scope: conversation, history: 'latest', fork: 'asOf' }),
+    decode(Document.DocumentRecord)({
+      ...record,
+      scope: conversation,
+      history: 'latest',
+      fork: 'asOf',
+    }),
   ).toThrow()
 })
 
@@ -88,8 +88,8 @@ test('document changes carry delta ops', () => {
       ],
     },
   }
-  expect(decode(StorageWrite)(write) as unknown).toEqual(write)
+  expect(decode(Write.StorageWrite)(write) as unknown).toEqual(write)
   expect(() =>
-    decode(StorageWrite)({ ...write, content: { ...write.content, ops: [['s', [], 'x']] } }),
+    decode(Write.StorageWrite)({ ...write, content: { ...write.content, ops: [['s', [], 'x']] } }),
   ).toThrow()
 })

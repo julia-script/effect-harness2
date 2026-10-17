@@ -1,18 +1,32 @@
-import { Cause, Deferred, Effect, Option } from 'effect'
+import { Deferred, Effect, Option } from 'effect'
 import type { Tx } from '../../session/Session.ts'
+import type { TaskId } from '../../storage/schema/Ids.ts'
 import type { TaskRecord } from '../../storage/schema/Task.ts'
 import type { Snapshot } from '../Registry.ts'
+import { loadScopes, scheduleReconcile } from './chains.ts'
 import { start, terminate } from './invocation.ts'
 import type { Reservation } from './invocation.ts'
+import { serve } from './reconcile.ts'
 import { resolve } from './resolve.ts'
-import { report, seal, withState } from './state.ts'
+import { withAbortMark, withState } from './state.ts'
 import type { Invocation, State } from './state.ts'
+import { parentOf } from './tree.ts'
+import { belowCancelled, ownedLive } from './walk.ts'
 
-/** Whether a waiting task still waits for a live task in its `on`; abort-marked ones leave. */
-const waiting = (state: State, record: TaskRecord) =>
-  record.state.status === 'waiting' &&
-  !record.abortRequested &&
-  record.state.on.some((id) => state.live.has(id))
+/**
+ * Live tasks a task waits for before its next invocation: its live ordinary owned work when
+ * abort-marked, since abort runs bottom-up, otherwise the live part of the `on` of a wait.
+ */
+export const waitingOn = (
+  state: State,
+  record: TaskRecord,
+  first = false,
+): ReadonlyArray<TaskId> => {
+  if (record.abortRequested) return ownedLive(state, record.id, { first })
+  if (record.state.status !== 'waiting') return []
+  const live = record.state.on.filter((id) => state.live.has(id))
+  return first ? live.slice(0, 1) : live
+}
 
 const createInvocation = (state: State, record: TaskRecord, mode: Invocation['mode']) => {
   const invocation: Invocation = {
@@ -37,9 +51,10 @@ const reserveOne = Effect.fnUntraced(function* (
   const mode = record.abortRequested ? 'abort' : 'run'
   const resolution = yield* resolve(state, record, snapshot)
   if (resolution.kind === 'blocked') {
-    // A blocked task without a mark stays live; an aborted one can run no abort handler.
+    // A blocked task without a mark stays live; an abandoned one waits for its definition, so its
+    // abort handler can clean up; any other aborted one can run no abort handler.
     if (mode === 'abort' && record.abortReason === undefined) {
-      yield* terminate(tx, record, { status: 'orphaned', reason: resolution.reason })
+      yield* terminate(state, tx, record, { status: 'orphaned', reason: resolution.reason })
     }
     return Option.none<Reservation>()
   }
@@ -58,33 +73,68 @@ const reserveOne = Effect.fnUntraced(function* (
   return Option.some(reservation)
 })
 
+/** Whether a live task can be reserved now; one that cannot leaves the runnable set. */
+const isCandidate = (state: State, id: TaskId): TaskRecord | undefined => {
+  const record = state.live.get(id)
+  const candidate =
+    record !== undefined &&
+    record.state.status !== 'completing' &&
+    !state.invocations.has(id) &&
+    // It returns once what it waits for ends, its record changes, or the work below it ends.
+    waitingOn(state, record, true).length === 0
+  if (!candidate) state.runnable.delete(id)
+  return candidate ? record : undefined
+}
+
+/** Abort-mark the tasks abandoned by an earlier Scheduler, once, before anything else runs. */
+const markAbandoned = Effect.fnUntraced(function* (state: State, tx: Tx) {
+  for (const id of state.abandoned) {
+    const record = state.live.get(id)
+    if (record !== undefined && !record.abortRequested) {
+      yield* tx.setTask(withAbortMark(record, 'restart'))
+    }
+  }
+})
+
+/** Reserve every eligible task of one pass; work below a cancelling owner waits for its mark. */
+const reserveAll = Effect.fnUntraced(function* (
+  state: State,
+  tx: Tx,
+  reservations: Array<Reservation>,
+) {
+  yield* loadScopes(state)
+  let snapshot: Snapshot | undefined
+  // Deleting the visited member of a Set does not disturb the iteration.
+  for (const id of state.runnable) {
+    const record = isCandidate(state, id)
+    if (record === undefined) continue
+    if (!record.abortRequested && !record.background && belowCancelled(state, parentOf(record))) {
+      scheduleReconcile(state)
+      continue
+    }
+    snapshot ??= yield* state.registry.snapshot
+    const reservation = yield* reserveOne(state, tx, record, snapshot)
+    if (Option.isSome(reservation)) reservations.push(reservation.value)
+  }
+})
+
 /**
- * Reserve every eligible task in one commit. A task that cannot be a candidate leaves the
- * runnable set until its record changes or the task it waits for ends; a blocked one stays.
+ * Reserve every eligible task in one commit. The first pass after open only abort-marks the
+ * abandoned tasks, so later passes see the marks.
  */
 const reserve = (state: State) => {
   const reservations: Array<Reservation> = []
+  let abandoned = false
   return state.session
     .commit((tx) =>
       Effect.gen(function* () {
         if (state.closing) return
-        let snapshot: Snapshot | undefined
-        // Deleting the visited member of a Set does not disturb the iteration.
-        for (const id of state.runnable) {
-          const record = state.live.get(id)
-          const candidate =
-            record !== undefined &&
-            record.state.status !== 'completing' &&
-            !state.invocations.has(id) &&
-            !waiting(state, record)
-          if (!candidate) {
-            state.runnable.delete(id)
-            continue
-          }
-          snapshot ??= yield* state.registry.snapshot
-          const reservation = yield* reserveOne(state, tx, record, snapshot)
-          if (Option.isSome(reservation)) reservations.push(reservation.value)
+        if (state.abandoned.size > 0) {
+          abandoned = true
+          yield* markAbandoned(state, tx)
+          return
         }
+        yield* reserveAll(state, tx, reservations)
       }),
     )
     .pipe(
@@ -96,29 +146,25 @@ const reserve = (state: State) => {
           }
         }),
       ),
-      Effect.as(reservations),
+      Effect.map(() => {
+        if (abandoned) {
+          state.abandoned.clear()
+          // Reserve again, now seeing the marks.
+          state.wake.openUnsafe()
+        }
+        return reservations
+      }),
     )
 }
 
-/** One pass: wait to be woken, then reserve and start every eligible task. */
+/** Reserve and start every eligible task. */
 const pass = (state: State) =>
-  Effect.gen(function* () {
-    yield* state.wake.await
-    state.wake.closeUnsafe()
-    for (const reservation of yield* reserve(state)) yield* start(state, reservation)
-  })
-
-/**
- * Reserve and start tasks whenever a pass is requested. A failed reservation commit seals the
- * Scheduler: it runs no task code, so it is a storage failure or a bug, and passing again would
- * not fix it.
- */
-export const drive = (state: State) =>
-  Effect.forever(pass(state)).pipe(
-    Effect.tapCause((cause) =>
-      Cause.hasInterruptsOnly(cause)
-        ? Effect.void
-        : Effect.andThen(report('Scheduler stopped: a reservation failed', cause), seal(state)),
+  Effect.suspend(() =>
+    Effect.flatMap(reserve(state), (reservations) =>
+      Effect.forEach(reservations, (reservation) => start(state, reservation), { discard: true }),
     ),
-    Effect.ignore,
   )
+
+/** Reserve and start tasks whenever a pass is requested. */
+export const drive = (state: State) =>
+  serve(state, state.wake, pass(state), 'Scheduler stopped: a reservation failed')

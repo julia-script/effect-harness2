@@ -105,6 +105,16 @@ export interface Runtime<I, S, R> extends Pick<
   readonly getTask: (id: TaskId) => Effect.Effect<TaskRecord | undefined, RuntimeError>
   /** Wait for a task's terminal receipt; fails with `TaskNotFound` for a missing task. */
   readonly waitForTask: (id: TaskId) => Effect.Effect<TerminalTask, RuntimeError>
+  /**
+   * Abort a task this task owns, as `Scheduler.abort` does, and wait until it is terminal. Fails
+   * with `TaskRejected` for a task another owns; succeeds at once for a terminal one.
+   */
+  readonly abortOwned: (id: TaskId) => Effect.Effect<void, RuntimeError>
+  /**
+   * Live tasks this task owns directly, in ID order, also those an earlier invocation created.
+   * Tasks in conversations it owns are not included.
+   */
+  readonly ownedTasks: Effect.Effect<ReadonlyArray<TaskRecord>, RuntimeError>
   /** Outcomes of terminal tasks, in order, as after a wait; fails when one is not terminal. */
   readonly outcomes: (
     ids: ReadonlyArray<TaskId>,

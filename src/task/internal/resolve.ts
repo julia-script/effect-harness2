@@ -2,7 +2,7 @@
 import { Effect, Exit } from 'effect'
 import type { TaskRecord } from '../../storage/schema/Task.ts'
 import type { Snapshot } from '../Registry.ts'
-import { lookup, report, runTaskCode, withState } from './state.ts'
+import { causeMessage, lookup, report, runTaskCode, withState } from './state.ts'
 import type { Erased, State } from './state.ts'
 
 /** Why a task cannot be reserved under a registry snapshot. Derived, never persisted. */
@@ -13,19 +13,24 @@ export type Resolution =
   | { readonly kind: 'blocked'; readonly reason: BlockedReason }
 
 /** A definition that can take a record, or why none can; deciding it runs no task code. */
-type Fit =
+export type Fit =
   | { readonly kind: 'fit'; readonly task: Erased; readonly migrates: boolean }
-  | { readonly kind: 'blocked'; readonly reason: BlockedReason }
+  | { readonly kind: 'blocked'; readonly reason: BlockedReason; readonly message?: string }
 
-const fit = (state: State, record: TaskRecord, task: Erased | undefined): Fit => {
+export const fit = (state: State, record: TaskRecord, task: Erased | undefined): Fit => {
   if (task === undefined) return { kind: 'blocked', reason: 'missing_task' }
   if (task.version === record.version) return { kind: 'fit', task, migrates: false }
   if (task.version < record.version) return { kind: 'blocked', reason: 'task_too_old' }
-  if (state.failedMigrations.get(record.id) === task) {
-    return { kind: 'blocked', reason: 'migration_failed' }
+  const failed = state.failedMigrations.get(record.id)
+  if (failed?.task === task) {
+    return { kind: 'blocked', reason: 'migration_failed', message: failed.message }
   }
   return { kind: 'fit', task, migrates: true }
 }
+
+/** Why a newer definition without `migrate` cannot take an older record. */
+export const missingMigration = (task: Erased, record: TaskRecord) =>
+  `Task ${task.name} version ${task.version} has no migration from ${record.version}`
 
 /** Whether a definition can take a running task: same version, or newer with a migration. */
 export const canReserve = (task: Erased, record: TaskRecord): boolean =>
@@ -51,14 +56,10 @@ export const resolve = Effect.fnUntraced(function* (
   const { migrate } = task
   const exit =
     migrate === undefined
-      ? Exit.die(
-          new Error(
-            `Task ${task.name} version ${task.version} has no migration from ${record.version}`,
-          ),
-        )
+      ? Exit.die(new Error(missingMigration(task, record)))
       : yield* runTaskCode(() => migrate(record.input, live.checkpoint, record.version))
   if (Exit.isFailure(exit)) {
-    state.failedMigrations.set(record.id, task)
+    state.failedMigrations.set(record.id, { task, message: causeMessage(exit.cause) })
     yield* report(`Task ${record.id} failed to migrate from version ${record.version}`, exit.cause)
     const blocked: Resolution = { kind: 'blocked', reason: 'migration_failed' }
     return blocked

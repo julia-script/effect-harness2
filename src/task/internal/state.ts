@@ -10,6 +10,19 @@ import type { Service as RegistryService, Snapshot } from '../Registry.ts'
 import type * as Task from '../Task.ts'
 import { ReadAfterWrite } from '../../session/SessionError.ts'
 import { SchedulerClosed } from '../TaskError.ts'
+import {
+  addTo,
+  cancellationIntent,
+  deleteFrom,
+  dropIfUnneeded,
+  known,
+  makeTree,
+  nodeOf,
+  parentNode,
+  relist,
+} from './tree.ts'
+import type { Tree } from './tree.ts'
+import { release } from './walk.ts'
 
 /** One in-memory execution of a task: its phases in run mode, or its abort handler. */
 export interface Invocation {
@@ -27,7 +40,8 @@ export interface Invocation {
 /**
  * The Scheduler's in-memory state. `live` mirrors every committed non-terminal task: the commit
  * listener updates it on the Session line, so code on the line reads exactly the committed state.
- * Every task transition is decided by one callback on the line.
+ * Every task transition is decided by one callback on the line. No pass visits every live task;
+ * the sets below hold each pass's candidates.
  */
 export interface State {
   readonly session: SessionService
@@ -38,16 +52,35 @@ export interface State {
   readonly scope: Scope.Closeable
   readonly live: Map<TaskId, TaskRecord>
   readonly invocations: Map<TaskId, Invocation>
+  /** The ownership index around live work. */
+  readonly tree: Tree
+  /** Live tasks with cancellation intent, the sources of abort cascades (spec §5.4). */
+  readonly intent: Set<TaskId>
   /** Live tasks the next reservation pass considers; ones found waiting leave it. */
   readonly runnable: Set<TaskId>
+  /** `completing` tasks the next finalize checks: ones that started holding, and holders of ended work. */
+  readonly finalizeChecks: Set<TaskId>
+  /** `failFast` waiters the next reconcile checks for a failed task in their `on`. */
+  readonly failFastChecks: Set<TaskId>
+  /**
+   * Live `abandonOnRestart` tasks found at open, from an earlier Scheduler. The first reservation
+   * pass abort-marks them with reason `restart`, so nothing of them or below them runs again.
+   */
+  readonly abandoned: Set<TaskId>
   /** Waiting tasks by each task in their `on`. */
   readonly waiters: Map<TaskId, Set<TaskId>>
   /** Terminal receipts awaited by `waitForTask`, by task. */
   readonly receipts: Map<TaskId, Deferred.Deferred<Task.TerminalTask, SchedulerClosed>>
+  /** Idle waits by conversation; `undefined` waits for every ownerless conversation. */
+  readonly idleWaiters: Map<ConversationId | undefined, Deferred.Deferred<void, SchedulerClosed>>
   /** The definition whose migration failed, per task; retried only for another definition. */
-  readonly failedMigrations: Map<TaskId, Erased>
+  readonly failedMigrations: Map<TaskId, { readonly task: Erased; readonly message: string }>
   /** Opened to request a reservation pass. */
   readonly wake: Latch.Latch
+  /** Opened to request a reconcile pass. */
+  readonly reconcileWake: Latch.Latch
+  /** Opened to request a sweep of the ownership index. */
+  readonly sweepWake: Latch.Latch
   closing: boolean
 }
 
@@ -63,11 +96,19 @@ export const makeState = (
   scope,
   live: new Map(),
   invocations: new Map(),
+  tree: makeTree(),
+  intent: new Set(),
   runnable: new Set(),
+  finalizeChecks: new Set(),
+  failFastChecks: new Set(),
+  abandoned: new Set(),
   waiters: new Map(),
   receipts: new Map(),
+  idleWaiters: new Map(),
   failedMigrations: new Map(),
   wake: Latch.makeUnsafe(false),
+  reconcileWake: Latch.makeUnsafe(false),
+  sweepWake: Latch.makeUnsafe(false),
   closing: false,
 })
 
@@ -76,42 +117,55 @@ export const kick = (state: State): void => {
   state.wake.openUnsafe()
 }
 
-export const addTo = <K, V>(map: Map<K, Set<V>>, key: K, value: V): void => {
-  const values = map.get(key)
-  if (values === undefined) map.set(key, new Set([value]))
-  else values.add(value)
-}
-
-const deleteFrom = <K, V>(map: Map<K, Set<V>>, key: K, value: V): void => {
-  const values = map.get(key)
-  if (values === undefined) return
-  values.delete(value)
-  if (values.size === 0) map.delete(key)
-}
-
 /** Whether a record is terminal, typed as the receipt. */
 export const isTerminal = (record: TaskRecord): record is Task.TerminalTask =>
   record.state.status === 'terminal'
 
+/** Forget a task that ended; it may free the task above it and its waiters. */
+const untrack = (state: State, record: TaskRecord): void => {
+  const { id } = record
+  const node = nodeOf(record)
+  state.live.delete(id)
+  state.intent.delete(id)
+  state.runnable.delete(id)
+  state.finalizeChecks.delete(id)
+  state.failFastChecks.delete(id)
+  state.failedMigrations.delete(id)
+  state.tree.settled.set(id, node)
+  // Before anything is forgotten: the walk up to the task it held passes the ended tasks between.
+  release(state, node)
+  for (const waiter of state.waiters.get(id) ?? []) state.runnable.add(waiter)
+  relist(state, id)
+  dropIfUnneeded(state, id)
+}
+
 /**
- * Bring the state in line with a task's committed record. A task that ended frees the tasks
- * waiting on it.
+ * Bring the state in line with a task's committed record. A task that ended may free the nearest
+ * live task above it: one holding its outcome finalizes, an abort-marked one runs its abort
+ * handler; its waiters may run.
  */
 export const track = (state: State, previous: TaskRecord | undefined, record: TaskRecord): void => {
-  const id = record.id
+  const { id } = record
   if (previous?.state.status === 'waiting') {
     for (const on of previous.state.on) deleteFrom(state.waiters, on, id)
   }
   if (isTerminal(record)) {
-    state.live.delete(id)
-    state.runnable.delete(id)
-    state.failedMigrations.delete(id)
-    for (const waiter of state.waiters.get(id) ?? []) state.runnable.add(waiter)
+    untrack(state, record)
     return
   }
   state.live.set(id, record)
-  if (record.state.status === 'completing') state.runnable.delete(id)
-  else state.runnable.add(id)
+  if (previous === undefined) {
+    if (!known(state, parentNode(record))) state.tree.unloaded.add(id)
+    relist(state, id)
+  }
+  if (cancellationIntent(record)) state.intent.add(id)
+  else state.intent.delete(id)
+  if (record.state.status === 'completing') {
+    state.runnable.delete(id)
+    state.finalizeChecks.add(id)
+  } else {
+    state.runnable.add(id)
+  }
   if (record.state.status === 'waiting') {
     for (const on of record.state.on) addTo(state.waiters, on, id)
   }
@@ -147,39 +201,19 @@ export const withState = (record: TaskRecord, next: TaskState): TaskRecord => {
   return { ...fieldsOf(record), ...(memos === undefined ? {} : { memos }), state: next }
 }
 
-/** The record with an abort request's mark, which replaces a `restart` mark. */
-export const withAbortMark = (record: TaskRecord): TaskRecord => {
+/**
+ * The record with an abort mark: `restart` for an abandonment; without a reason, a request,
+ * which replaces `restart`.
+ */
+export const withAbortMark = (record: TaskRecord, reason?: 'restart'): TaskRecord => {
   const { abortReason: _reason, ...rest } = record
-  return { ...rest, abortRequested: true }
+  return { ...rest, abortRequested: true, ...(reason === undefined ? {} : { abortReason: reason }) }
 }
 
 /** Own memo entry only: a name such as `toString` must not resolve to an inherited property. */
 export const memoOf = (record: TaskRecord | undefined, name: string): Schema.Json | undefined => {
   const memos = record !== undefined && 'memos' in record ? record.memos : undefined
   return memos !== undefined && Object.hasOwn(memos, name) ? memos[name] : undefined
-}
-
-/** Structural equality of two JSON values; object key order is ignored. */
-export const jsonEqual = (left: Schema.Json, right: Schema.Json): boolean => {
-  if (left === right) return true
-  if (typeof left !== 'object' || typeof right !== 'object' || left === null || right === null) {
-    return false
-  }
-  if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
-    const rightArray = cast<Schema.Json, ReadonlyArray<Schema.Json>>(right)
-    return left.every((value: Schema.Json, index) => jsonEqual(value, rightArray[index] ?? null))
-  }
-  // Neither is an array: both are objects.
-  const leftObject = cast<Schema.Json, Record<string, Schema.Json>>(left)
-  const rightObject = cast<Schema.Json, Record<string, Schema.Json>>(right)
-  const keys = Object.keys(leftObject)
-  if (keys.length !== Object.keys(rightObject).length) return false
-  return keys.every(
-    (key) =>
-      Object.hasOwn(rightObject, key) &&
-      jsonEqual(leftObject[key] ?? null, rightObject[key] ?? null),
-  )
 }
 
 /** The message of a failure, for a `faulted` outcome. */
@@ -219,15 +253,18 @@ export const withMemo = (record: TaskRecord, name: string, value: Schema.Json): 
 
 export const closedError = () => new SchedulerClosed({ message: 'Scheduler is closed' })
 
-/** Stop scheduling: no phase starts any more, and every receipt wait fails. */
+/** Stop scheduling: no phase starts any more, and every receipt and idle wait fails. */
 export const seal = (state: State) =>
   Effect.suspend(() => {
     state.closing = true
     const receipts = [...state.receipts.values()]
+    const idle = [...state.idleWaiters.values()]
     state.receipts.clear()
-    return Effect.forEach(receipts, (receipt) => Deferred.fail(receipt, closedError()), {
-      discard: true,
-    })
+    state.idleWaiters.clear()
+    return Effect.andThen(
+      Effect.forEach(receipts, (wait) => Deferred.fail(wait, closedError()), { discard: true }),
+      Effect.forEach(idle, (wait) => Deferred.fail(wait, closedError()), { discard: true }),
+    )
   })
 
 /**

@@ -4,6 +4,7 @@ import * as Tracker from '../../delta/Tracker.ts'
 import type { Service as Storage } from '../../storage/Storage.ts'
 import type { StorageRequestError } from '../../storage/StorageError.ts'
 import type { DocumentAddress, DocumentRecord } from '../../storage/schema/Document.ts'
+import type { DocumentId } from '../../storage/schema/Ids.ts'
 import type { JsonObject } from '../../storage/schema/Json.ts'
 import type { AnyDefinition } from './documents.ts'
 import { materialize, refused } from './documents.ts'
@@ -13,8 +14,8 @@ import type { Guarded } from './transaction/state.ts'
 /**
  * The Session's cache of loaded document trackers, ported from pi's `session/session.ts`.
  *
- * Every cached incarnation is idle until observation lands, and an idle one leaves the cache once
- * it was not used for the retention. Eviction runs on the mutation line, so no transaction ever
+ * A cached incarnation with an attached observer is pinned; every other one is idle, and leaves
+ * the cache once it was not used for the retention. Eviction runs on the mutation line, so no transaction ever
  * holds a tracker that leaves: a sweep fiber sleeps until the oldest idle document expires, and
  * every commit sweeps when it ends.
  */
@@ -45,8 +46,13 @@ export interface Cache {
   readonly install: (loaded: Loaded) => Effect.Effect<void>
   /** Drop a retired incarnation if it is still the one cached at its address. */
   readonly evict: (addressId: string, recordId: DocumentRecord['id']) => Effect.Effect<void>
-  /** Note a use of a cached document. */
+  /** Note a use of a cached document; a pinned one is not idle. */
   readonly touch: (addressId: string) => Effect.Effect<void>
+  /**
+   * Keep a cached incarnation from eviction for one observer, until the release this returns
+   * runs, once. After its last release the incarnation is idle again.
+   */
+  readonly pin: (addressId: string, recordId: DocumentId) => Effect.Effect<Effect.Effect<void>>
   /** On the line: evict every idle document whose retention passed. */
   readonly sweep: Effect.Effect<void>
   /** Drop every tracker; later access loads from Storage. */
@@ -57,6 +63,8 @@ interface State {
   readonly documents: Map<string, Loaded>
   /** Idle documents by address, oldest use first, with the time of that use. */
   readonly idle: Map<string, number>
+  /** Observers attached per incarnation; a cached incarnation with any is never idle. */
+  readonly pinned: Map<DocumentId, number>
   /** The pending eviction of the oldest idle document. */
   pending: { readonly at: number; readonly fiber: Fiber.Fiber<void> } | undefined
 }
@@ -156,7 +164,8 @@ const makeTouch = (state: State, environment: Environment, sweep: Effect.Effect<
   const granule = Math.min(1000, retention / 10)
   return (addressId: string) =>
     Effect.gen(function* () {
-      if (!state.documents.has(addressId)) return
+      const cached = state.documents.get(addressId)
+      if (cached === undefined || state.pinned.has(cached.record.id)) return
       const now = yield* Clock.currentTimeMillis
       const since = state.idle.get(addressId)
       if (since !== undefined && now - since < granule) return
@@ -168,8 +177,36 @@ const makeTouch = (state: State, environment: Environment, sweep: Effect.Effect<
     })
 }
 
+const makePin = (
+  state: State,
+  touch: Cache['touch'],
+  addressId: string,
+  recordId: DocumentId,
+): Effect.Effect<Effect.Effect<void>> =>
+  Effect.sync(() => {
+    state.pinned.set(recordId, (state.pinned.get(recordId) ?? 0) + 1)
+    state.idle.delete(addressId)
+    let pinned = true
+    return Effect.suspend(() => {
+      if (!pinned) return Effect.void
+      pinned = false
+      const count = (state.pinned.get(recordId) ?? 1) - 1
+      if (count > 0) {
+        state.pinned.set(recordId, count)
+        return Effect.void
+      }
+      state.pinned.delete(recordId)
+      return state.documents.get(addressId)?.record.id === recordId ? touch(addressId) : Effect.void
+    })
+  })
+
 export const make = (environment: Environment): Cache => {
-  const state: State = { documents: new Map(), idle: new Map(), pending: undefined }
+  const state: State = {
+    documents: new Map(),
+    idle: new Map(),
+    pinned: new Map(),
+    pending: undefined,
+  }
   const sweep = makeSweep(state, environment)
   const touch = makeTouch(state, environment, sweep)
   const cache: Cache = {
@@ -190,6 +227,7 @@ export const make = (environment: Environment): Cache => {
         if (state.documents.get(addressId)?.record.id === recordId) drop(state, addressId)
       }),
     touch,
+    pin: (addressId, recordId) => makePin(state, touch, addressId, recordId),
     sweep,
     clear: Effect.sync(() => {
       state.documents.clear()

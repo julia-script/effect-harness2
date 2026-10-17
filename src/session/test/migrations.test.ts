@@ -1,6 +1,6 @@
 /* oxlint-disable max-lines, max-lines-per-function -- ported describe blocks */
 import { describe, expect, expectTypeOf, test } from 'bun:test'
-import { Data, Effect, Exit, Scope } from 'effect'
+import { Data, Effect, Exit, Scope, Stream } from 'effect'
 import { cast } from 'effect/Function'
 import type { Ids, Json, Write } from '../../storage/schema/index.ts'
 import { Document, SessionError } from '../index.ts'
@@ -94,7 +94,6 @@ describe('Session document migrations', () => {
       }),
     ))
 
-  // Ported without pi's watches of the older and newer shapes: observation is not ported yet.
   test('writes the required base on the first successful transaction, then writes deltas', () =>
     runSession(({ session, recorder }) =>
       Effect.gen(function* () {
@@ -120,8 +119,12 @@ describe('Session document migrations', () => {
         })
         yield* session.commit((tx) => tx.doc(Old))
         yield* session.unloadDocuments
+        // An observer of the older shape.
+        const watch = yield* Effect.flatMap(session.watchDoc(Old), Effect.fromNullishOr)
         expect(yield* session.snapshot(Current)).toEqual({ count: 4 })
         const snapshot = yield* session.snapshot(Current)
+        // An observer of the new shape: the migration changes nothing it sees.
+        const current = yield* Effect.flatMap(session.watchDoc(Current), Effect.fromNullishOr)
 
         const { publication } = yield* published(session, (tx) => tx.doc(Current))
         expect(recorder.commits.at(-1)?.[0]).toMatchObject({
@@ -129,7 +132,8 @@ describe('Session document migrations', () => {
           content: { kind: 'base', version: 3, value: { count: 4 } },
         })
         expect(checkpoints).toBe(0)
-        // The migration-only base is published.
+        // The migration-only base is published, so the older-shape watch receives the new value as
+        // a root replacement.
         expect(documentChanges(publication)).toMatchObject([
           { version: 3, value: { count: 4 }, ops: [] },
         ])
@@ -145,6 +149,15 @@ describe('Session document migrations', () => {
           content: { kind: 'delta', version: 3 },
         })
         expect(checkpoints).toBe(1)
+        // pi stops the watches before this edit; here it shows what each one received: the
+        // new-shape watch's first change is the edit, not the base.
+        const frames = yield* Stream.runCollect(Stream.take(watch.changes, 2))
+        expect(frames).toEqual([
+          { value: { count: 4 }, ops: [['r', { count: 4 }]] },
+          { value: { count: 7 }, ops: [['s', ['count'], 7]] },
+        ])
+        const currentFrames = yield* Stream.runCollect(Stream.take(current.changes, 1))
+        expect(currentFrames.map(({ value }) => value)).toEqual([{ count: 7 }])
         yield* session.unloadDocuments
         expect(yield* session.snapshot(Current)).toEqual({ count: 7 })
       }),
@@ -611,6 +624,30 @@ describe('Session tracker cache across definition versions', () => {
         const error = yield* Effect.flip(session.snapshot(V1Doc))
         expect(error).toBeInstanceOf(SessionError.DocumentError)
         expect(error.message).toContain('newer version 2')
+      }),
+    ))
+
+  test('sends observers of an older shape a root replacement after a newer token writes', () =>
+    runSession(({ session }) =>
+      Effect.gen(function* () {
+        yield* session.commit((tx) => tx.doc(V1Doc))
+        const state = yield* Effect.flatMap(session.documentState(V1Doc), Effect.fromNullishOr)
+        const watch = yield* Effect.flatMap(session.watchDoc(V1Doc), Effect.fromNullishOr)
+        yield* session.commit((tx) =>
+          Effect.map(tx.doc(V2Doc), (draft) => {
+            draft.names.push('second')
+          }),
+        )
+        // Typed by the older token, the observers hold the newer shape.
+        const migrated: unknown = yield* state.get
+        expect(migrated).toEqual({ names: ['first', 'second'] })
+        // pi's watch value follows the changes; here `value` is the baseline, and the change
+        // carries the new value.
+        expect(watch.value).toEqual({ name: 'first' })
+        const frames: unknown = yield* Stream.runCollect(Stream.take(watch.changes, 1))
+        expect(frames).toEqual([
+          { value: { names: ['first', 'second'] }, ops: [['r', { names: ['first', 'second'] }]] },
+        ])
       }),
     ))
 

@@ -21,6 +21,10 @@
     "./session": {
       "types": "./dist/session/index.d.ts",
       "default": "./dist/session/index.js"
+    },
+    "./delta": {
+      "types": "./dist/delta/index.d.ts",
+      "default": "./dist/delta/index.js"
     }
   },
   "scripts": {

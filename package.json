@@ -33,6 +33,10 @@
     "./harness": {
       "types": "./dist/harness/index.d.ts",
       "default": "./dist/harness/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
     }
   },
   "scripts": {

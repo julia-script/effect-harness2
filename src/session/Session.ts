@@ -6,7 +6,9 @@ import { Context, Layer, Schema } from 'effect'
 import type { Duration, Effect, PubSub, Scope } from 'effect'
 import type { Storage } from '../storage/Storage.ts'
 import { StorageError } from '../storage/StorageError.ts'
+import * as Conversation from '../storage/schema/Conversation.ts'
 import { ConversationRecord } from '../storage/schema/Conversation.ts'
+import * as Entry from '../storage/schema/Entry.ts'
 import { EntryRecord } from '../storage/schema/Entry.ts'
 import { ConversationId, EntryId, Seq, TaskId } from '../storage/schema/Ids.ts'
 import type { SubmissionId } from '../storage/schema/Ids.ts'
@@ -33,11 +35,8 @@ import type {
 } from './SessionError.ts'
 
 /** Ownership selected explicitly whenever a conversation is created. */
-export const ConversationOwnership = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal('ownerless') }),
-  Schema.Struct({ kind: Schema.Literal('task'), taskId: TaskId }),
-])
-export type ConversationOwnership = typeof ConversationOwnership.Type
+export const ConversationOwnership = Conversation.ConversationOwnership
+export type ConversationOwnership = Conversation.ConversationOwnership
 
 /** Who owns a task: its conversation, or another task of the same conversation. */
 export const TaskOwnership = Schema.Union([
@@ -75,15 +74,8 @@ export interface TaskKind<I extends Schema.Json> {
 }
 
 /** Entry content supplied before the Session assigns identity and task attribution. */
-export const EntryDraft = Schema.Struct({
-  kind: EntryRecord.fields.kind,
-  model: EntryRecord.fields.model,
-  data: EntryRecord.fields.data,
-  edits: EntryRecord.fields.edits,
-  /** `'self'` starts active context at the newly assigned entry ID. */
-  head: Schema.optionalKey(Schema.Union([EntryId, Schema.Literal('self')])),
-})
-export type EntryDraft = typeof EntryDraft.Type
+export const EntryDraft = Entry.EntryDraft
+export type EntryDraft = Entry.EntryDraft
 
 /** Terminal status staged for a submission; identity, type, and entry come from its record. */
 export const SubmissionSettlement = Schema.Union([

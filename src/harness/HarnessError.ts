@@ -32,3 +32,15 @@ export class SubmissionNotFound extends Schema.TaggedError<
   message: Schema.String,
   submissionId: SubmissionId,
 }) {}
+
+/**
+ * A named `init` failed, so its conversation was not created: no initializer has the name, its
+ * payload did not decode, or the initializer failed. `cause` is the failure.
+ */
+export class InitFailed extends Schema.TaggedError<InitFailed, { readonly brand: unique symbol }>(
+  'effect-harness/harness/HarnessError/InitFailed',
+)('InitFailed', {
+  message: Schema.String,
+  init: Schema.String,
+  cause: Schema.optionalKey(Schema.Defect()),
+}) {}

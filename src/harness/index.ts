@@ -6,6 +6,12 @@
 /** The `Harness` service: conversations, submissions, and run control. */
 export * as Harness from './Harness.ts'
 
+/** The loop serving `HarnessRpcs` to its clients. */
+export * as HarnessServer from './HarnessServer.ts'
+
+/** The loop side of named inits. */
+export * as Initializer from './Initializer.ts'
+
 /** Conversation handles. */
 export * as Conversation from './Conversation.ts'
 

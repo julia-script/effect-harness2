@@ -8,19 +8,22 @@
  * settles the run's inputs. While the run is live, submissions queue in `pi.inbox`, and the run
  * places them at its boundaries. Aborting a conversation, or a cascade that reaches one, withdraws
  * its queued inputs; a run task the scheduler faults or orphans ends its run `unanswered`.
+ *
+ * This is the loop side, for code that runs with the loop, such as tasks. Calling code uses
+ * `HarnessClient` instead, which reaches the loop through `HarnessServer` over a transport.
  */
-import { Context, Effect, Layer, Schema } from 'effect'
+import { Context, Effect, Layer } from 'effect'
 import type { Duration, Scope } from 'effect'
+import * as Rpcs from '../client/HarnessRpcs.ts'
 import { Session } from '../session/Session.ts'
 import type { Service as SessionService, Tx } from '../session/Session.ts'
 import type { CommitError, TxDocumentError } from '../session/SessionError.ts'
 import type { ConversationRecord } from '../storage/schema/Conversation.ts'
 import type { ConversationId, SubmissionId } from '../storage/schema/Ids.ts'
-import { SubmissionRecord } from '../storage/schema/Submission.ts'
 import type { Storage } from '../storage/Storage.ts'
 import type { StorageError } from '../storage/StorageError.ts'
 import type { Registry } from '../task/Registry.ts'
-import { Inspection as SchedulerInspection, Scheduler } from '../task/Scheduler.ts'
+import { Scheduler } from '../task/Scheduler.ts'
 import type { Service as SchedulerService } from '../task/Scheduler.ts'
 import type { Conversation, CreateOptions, Init } from './Conversation.ts'
 import * as internal from './internal/harness.ts'
@@ -28,12 +31,8 @@ import type * as Settings from './Settings.ts'
 import type { AbortResult, Submission } from './Submission.ts'
 
 /** Live work: scheduling state, every live task, and the queued and placed submissions. */
-export const Inspection = Schema.Struct({
-  ...SchedulerInspection.fields,
-  /** In ID order. */
-  submissions: Schema.Array(SubmissionRecord),
-})
-export type Inspection = typeof Inspection.Type
+export const Inspection = Rpcs.Inspection
+export type Inspection = Rpcs.Inspection
 
 /** How a Harness runs. */
 export interface Options {

@@ -4,7 +4,7 @@
  */
 import { Schema } from 'effect'
 import type { Effect } from 'effect'
-import { EntryDraft } from '../session/Session.ts'
+import { EntryDraft } from '../storage/schema/Entry.ts'
 import type { CommitError } from '../session/SessionError.ts'
 import { SubmissionId } from '../storage/schema/Ids.ts'
 import { JsonObject } from '../storage/schema/Json.ts'

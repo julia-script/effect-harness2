@@ -28,7 +28,10 @@
         "src/storage/test/jsonl/**",
         "src/storage/internal/sqlStorage.ts",
         "src/storage/internal/sql/**",
-        "src/storage/test/sql/**"
+        "src/storage/test/sql/**",
+        "src/client/**",
+        "src/harness/HarnessServer.ts",
+        "src/harness/internal/server.ts"
       ],
       "rules": {
         "effecttsgo/unstable-api-usage": "off"

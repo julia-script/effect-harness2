@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
+  "plugins": ["unicorn", "typescript", "oxc", "effecttsgo"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "pedantic": "error",
+    "perf": "error"
+  },
+  "ignorePatterns": ["repos/**", "**/dist/**"],
+  "options": {
+    "typeAware": true,
+    "denyWarnings": true
+  },
+  "rules": {
+    "no-nested-ternary": "error"
+  },
+  "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"]
+}

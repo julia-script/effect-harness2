@@ -1,6 +1,7 @@
-import { expect, test } from 'bun:test'
+import { expect } from 'bun:test'
 import { Effect, Schema } from 'effect'
-import { createRoot, entryWrite, ids, pendingTask, withStorage } from './support.ts'
+import { storageCase, createRoot, entryWrite, ids, pendingTask } from '../support.ts'
+import type { StorageCase } from '../support.ts'
 import { Storage, StorageError } from '../../index.ts'
 import { Ids, Scan } from '../../schema/index.ts'
 
@@ -44,8 +45,8 @@ const forkChain = (storage: Storage.Service) =>
     return { rootId, childId, grandchildId, rootSeq, ...entries }
   })
 
-test('scans deep fork history in either order through every ancestor cap', () =>
-  withStorage((storage) =>
+export const entryCases: ReadonlyArray<StorageCase> = [
+  storageCase('scans deep fork history in either order through every ancestor cap', (storage) =>
     Effect.gen(function* () {
       const chain = yield* forkChain(storage)
       const query = { conversationId: chain.grandchildId }
@@ -76,10 +77,9 @@ test('scans deep fork history in either order through every ancestor cap', () =>
       expect(mismatch).toBeInstanceOf(StorageError.StorageRequestError)
       expect(mismatch.message).toContain('cursor')
     }),
-  ))
+  ),
 
-test('finds head markers and visible entries through the fork chain', () =>
-  withStorage((storage) =>
+  storageCase('finds head markers and visible entries through the fork chain', (storage) =>
     Effect.gen(function* () {
       const chain = yield* forkChain(storage)
       const current = yield* storage.findLatestHeadMarker(chain.grandchildId)
@@ -106,29 +106,29 @@ test('finds head markers and visible entries through the fork chain', () =>
       const error = yield* Effect.flip(storage.visibleEntry(unknown, chain.rootFirst))
       expect(error.message).toBe('Unknown conversation: 999999')
     }),
-  ))
+  ),
 
-test('indexes entries committed out of ID order and continues a cursor after newer commits', () =>
-  withStorage((storage) =>
-    Effect.gen(function* () {
-      const rootId = yield* createRoot(storage)
-      yield* storage.commit([
-        entryWrite(Ids.EntryId.make(30), rootId),
-        entryWrite(Ids.EntryId.make(10), rootId),
-        entryWrite(Ids.EntryId.make(20), rootId, 'marker', { head: Ids.EntryId.make(10) }),
-      ])
-      const first = yield* storage.scanEntries({ conversationId: rootId }, 2)
-      expect(ids(first)).toEqual([30, 20])
-      expect((yield* storage.findLatestHeadMarker(rootId))?.id).toBe(Ids.EntryId.make(20))
-      yield* storage.commit([entryWrite(yield* storage.mintId(Ids.EntryId), rootId)])
-      const second = yield* storage.scanEntries({ conversationId: rootId }, 2, first.next)
-      expect(ids(second)).toEqual([10])
-      expect(second.next).toBeUndefined()
-    }),
-  ))
+  storageCase(
+    'indexes entries committed out of ID order and continues a cursor after newer commits',
+    (storage) =>
+      Effect.gen(function* () {
+        const rootId = yield* createRoot(storage)
+        yield* storage.commit([
+          entryWrite(Ids.EntryId.make(30), rootId),
+          entryWrite(Ids.EntryId.make(10), rootId),
+          entryWrite(Ids.EntryId.make(20), rootId, 'marker', { head: Ids.EntryId.make(10) }),
+        ])
+        const first = yield* storage.scanEntries({ conversationId: rootId }, 2)
+        expect(ids(first)).toEqual([30, 20])
+        expect((yield* storage.findLatestHeadMarker(rootId))?.id).toBe(Ids.EntryId.make(20))
+        yield* storage.commit([entryWrite(yield* storage.mintId(Ids.EntryId), rootId)])
+        const second = yield* storage.scanEntries({ conversationId: rootId }, 2, first.next)
+        expect(ids(second)).toEqual([10])
+        expect(second.next).toBeUndefined()
+      }),
+  ),
 
-test('filters and pages conversations by owner edges', () =>
-  withStorage((storage) =>
+  storageCase('filters and pages conversations by owner edges', (storage) =>
     Effect.gen(function* () {
       const rootId = yield* createRoot(storage)
       const other = yield* storage.mintId(Ids.ConversationId)
@@ -162,10 +162,9 @@ test('filters and pages conversations by owner edges', () =>
       const both = { ownerConversationId: rootId, ownerTaskId: taskA }
       expect(ids(yield* storage.scanConversations(both, 10))).toEqual([a])
     }),
-  ))
+  ),
 
-test('scans tables in either ID order and continues a cursor in its order', () =>
-  withStorage((storage) =>
+  storageCase('scans tables in either ID order and continues a cursor in its order', (storage) =>
     Effect.gen(function* () {
       const rootId = yield* createRoot(storage)
       const taskIds: number[] = []
@@ -196,4 +195,5 @@ test('scans tables in either ID order and continues a cursor in its order', () =
       const malformed = yield* Effect.flip(storage.scanTasks({}, 2, { after: 'x' }))
       expect(malformed.message).toBe('Invalid storage cursor')
     }),
-  ))
+  ),
+]

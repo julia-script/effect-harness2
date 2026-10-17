@@ -182,5 +182,5 @@ export const semantics = (record: DocumentRecord | DocumentCreate): string | und
   'history' in record ? `${record.history}/${record.fork}` : undefined
 
 /** Session, task, and latest-history conversation documents keep only current content. */
-export const isCurrentOnly = (record: DocumentRecord): boolean =>
+export const isCurrentOnly = (record: DocumentRecord | DocumentCreate): boolean =>
   !('history' in record) || record.history === 'latest'

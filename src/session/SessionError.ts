@@ -1,0 +1,50 @@
+/**
+ * Errors a `Session` reports.
+ */
+import { Schema } from 'effect'
+
+/**
+ * The Session failed, so nothing runs or commits any more. It fails on the first `StorageError`
+ * its Storage reports; `cause` is that error. Reopen the Session over the same Storage to recover
+ * from what was committed.
+ */
+export class SessionFailed extends Schema.TaggedError<
+  SessionFailed,
+  { readonly brand: unique symbol }
+>('effect-harness/session/SessionError/SessionFailed')('SessionFailed', {
+  message: Schema.String,
+  cause: Schema.Defect(),
+}) {}
+
+/** The Session's scope closed: it admits no more commits. */
+export class SessionClosed extends Schema.TaggedError<
+  SessionClosed,
+  { readonly brand: unique symbol }
+>('effect-harness/session/SessionError/SessionClosed')('SessionClosed', {
+  message: Schema.String,
+}) {}
+
+/**
+ * A transaction read a table after its first table write. Read every required row before
+ * writing.
+ */
+export class ReadAfterWrite extends Schema.TaggedError<
+  ReadAfterWrite,
+  { readonly brand: unique symbol }
+>('effect-harness/session/SessionError/ReadAfterWrite')('ReadAfterWrite', {
+  message: Schema.String,
+  /** The `Tx` read that was refused. */
+  method: Schema.String,
+}) {}
+
+/**
+ * A transaction operation was rejected: it names a record that does not exist or cannot change
+ * that way, it ran after its transaction settled, or the batch failed validation before Storage
+ * saw it. Nothing of the transaction is committed, and the Session stays usable.
+ */
+export class TransactionError extends Schema.TaggedError<
+  TransactionError,
+  { readonly brand: unique symbol }
+>('effect-harness/session/SessionError/TransactionError')('TransactionError', {
+  message: Schema.String,
+}) {}

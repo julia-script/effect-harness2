@@ -10,8 +10,10 @@ import {
   InvalidSubmission,
   SubmissionNotFound,
 } from '../harness/HarnessError.ts'
+import { AgentEvent } from '../harness/AgentEvent.ts'
 import { Change, View } from '../harness/AgentState.ts'
 import { AbortResult, Draft, Settled } from '../harness/Submission.ts'
+import { ConversationView, Frame, TaskGraph } from '../harness/ViewState.ts'
 import {
   DocumentError,
   SessionClosed,
@@ -148,4 +150,20 @@ export class HarnessRpcs extends RpcGroup.make(
     success: Inspection,
     error: Schema.Union([CommitError, StorageError]),
   }),
+  /** The conversation's view now, then each commit's change of it, until the client stops. */
+  Rpc.make('WatchView', {
+    payload: { conversationId: ConversationId },
+    success: Frame(ConversationView),
+    error: CommitError,
+    stream: true,
+  }),
+  /** A batch holding the conversation's `snapshot`, then one batch per commit with events. */
+  Rpc.make('WatchEvents', {
+    payload: { conversationId: ConversationId },
+    success: Schema.Array(AgentEvent),
+    error: CommitError,
+    stream: true,
+  }),
+  /** The task graph now, then each commit's change of it. */
+  Rpc.make('WatchTaskGraph', { success: Frame(TaskGraph), error: CommitError, stream: true }),
 ) {}

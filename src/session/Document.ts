@@ -255,46 +255,45 @@ export interface Retire {
   ): Retired
 }
 
-type SnapshotOf<T extends JsonObject, E> = Effect.Effect<Readonly<T> | undefined, SnapshotError | E>
-
-/** Read a document's committed value; never creates one. Absent documents read `undefined`. */
-export interface Snapshot {
-  <T extends JsonObject, E>(token: SessionToken<T, E>): SnapshotOf<T, E>
+type ReadOf<T extends JsonObject, X, E> = Effect.Effect<Readonly<T> | undefined, X | E>
+/** Committed document reads failing with `X`, overloaded by token kind. */
+export interface Reads<X> {
+  <T extends JsonObject, E>(token: SessionToken<T, E>): ReadOf<T, X, E>
   <T extends JsonObject, E>(
     token: ConversationToken<T, E>,
     conversationId: ConversationId,
-  ): SnapshotOf<T, E>
-  <T extends JsonObject, E>(token: TaskToken<T, E>, taskId: TaskId): SnapshotOf<T, E>
+  ): ReadOf<T, X, E>
+  <T extends JsonObject, E>(token: TaskToken<T, E>, taskId: TaskId): ReadOf<T, X, E>
   <T extends JsonObject, I extends Schema.Json, E>(
     token: SessionFamilyToken<T, I, E>,
     key: string,
-  ): SnapshotOf<T, E>
+  ): ReadOf<T, X, E>
   <T extends JsonObject, I extends Schema.Json, E>(
     token: ConversationFamilyToken<T, I, E>,
     conversationId: ConversationId,
     key: string,
-  ): SnapshotOf<T, E>
+  ): ReadOf<T, X, E>
   <T extends JsonObject, I extends Schema.Json, E>(
     token: TaskFamilyToken<T, I, E>,
     taskId: TaskId,
     key: string,
-  ): SnapshotOf<T, E>
+  ): ReadOf<T, X, E>
 }
 
-/**
- * Read a rewindable conversation document as of the commit of an entry visible from
- * `conversationId`, following fork ancestry. Fails when the entry is not visible.
- */
+/** Read a document's committed value; never creates one. Absent documents read `undefined`. */
+export interface Snapshot extends Reads<SnapshotError> {}
+
+/** A rewindable document as of an entry visible from `conversationId`, which must be visible. */
 export interface SnapshotAsOf {
   <T extends JsonObject, E>(
     token: RewindableToken<T, E>,
     conversationId: ConversationId,
     at: EntryId,
-  ): SnapshotOf<T, E>
+  ): ReadOf<T, SnapshotError, E>
   <T extends JsonObject, I extends Schema.Json, E>(
     token: RewindableFamilyToken<T, I, E>,
     conversationId: ConversationId,
     key: string,
     at: EntryId,
-  ): SnapshotOf<T, E>
+  ): ReadOf<T, SnapshotError, E>
 }

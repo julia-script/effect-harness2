@@ -3,7 +3,7 @@
  * conversation's own spend. Every built-in writer of assistant entries, and every summarization
  * attempt of a compaction, adds its usage in the commit that records it.
  */
-import { Effect, Schema } from 'effect'
+import { Effect } from 'effect'
 import { cast } from 'effect/Function'
 import type { Draft } from '../delta/Tracker.ts'
 import { Usage } from '../model/Message.ts'
@@ -11,14 +11,9 @@ import * as Document from '../session/Document.ts'
 import type { Tx } from '../session/Session.ts'
 import type { ConversationId } from '../storage/schema/Ids.ts'
 import { strictJson } from './internal/json.ts'
+import type { UsageState as State } from './ViewState.ts'
 
-export const State = Schema.Struct({
-  /** Assistant entries and summarization attempts, keyed `provider/modelId`. */
-  models: Schema.Record(Schema.String, Usage),
-  /** Tool results, keyed by tool name. */
-  tools: Schema.Record(Schema.String, Usage),
-})
-export type State = typeof State.Type
+export { UsageState as State } from './ViewState.ts'
 
 /** One per conversation; every fork starts empty. */
 export const document = Document.make<State>({

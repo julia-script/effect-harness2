@@ -1,18 +1,19 @@
 /**
  * The loop serving its clients: `HarnessRpcs` on the `Harness`, over the `RpcServer.Protocol` in
- * context. Run it with `Layer.launch`; clients reach it through the matching transport. In its own
+ * context. `layer` builds the default loop and serves it; `layerRpcs` serves a Harness built
+ * elsewhere. Run it with `Layer.launch`; clients reach it through the matching transport. In its own
  * process, give it `HarnessTransport.layerWebSocketServer(path)` and serve it with
  * `HttpRouter.serve` on the platform's HTTP server.
  */
 import { Layer } from 'effect'
 import { RpcServer } from 'effect/rpc'
-import type { Session } from '../session/Session.ts'
+import { HarnessRpcs } from '../client/HarnessRpcs.ts'
+import type { Model } from '../model/Model.ts'
 import type { CommitError } from '../session/SessionError.ts'
 import type { Storage } from '../storage/Storage.ts'
-import type { Registry } from '../task/Registry.ts'
-import type { Scheduler } from '../task/Scheduler.ts'
-import { HarnessRpcs } from '../client/HarnessRpcs.ts'
+import type { Extension } from './Extension.ts'
 import type { Extensions } from './Extensions.ts'
+import type { InvalidExtension } from './HarnessError.ts'
 import * as Harness from './Harness.ts'
 import type { Initializer } from './Initializer.ts'
 import { handlers } from './internal/server.ts'
@@ -22,19 +23,23 @@ export interface ServeOptions {
   readonly initializers?: ReadonlyArray<Initializer>
 }
 
-export interface Options extends Harness.Options, ServeOptions {}
+export interface Options<Installs extends ReadonlyArray<Extension> = ReadonlyArray<Extension>>
+  extends Harness.LayerOptions<Installs>, ServeOptions {}
 
 /** Serve the `Harness` in context. */
-export const layer = (
+export const layerRpcs = (
   options: ServeOptions = {},
 ): Layer.Layer<never, never, Harness.Harness | RpcServer.Protocol> =>
   RpcServer.layer(HarnessRpcs).pipe(Layer.provide(handlers(options.initializers ?? [])))
 
-/** Open a Harness over the Storage, Registry and Extensions, and serve it. */
-export const layerWith = (
-  options: Options = {},
+/**
+ * The default loop, `Harness.layer`, served over the `RpcServer.Protocol` in context. It needs the
+ * `Storage`, the `Model`, and the implementations of the given extensions' tools.
+ */
+export const layer = <const Installs extends ReadonlyArray<Extension> = readonly []>(
+  options: Options<Installs> = {},
 ): Layer.Layer<
-  Harness.Harness | Session | Scheduler,
-  CommitError,
-  Storage | Registry | Extensions | RpcServer.Protocol
-> => layer(options).pipe(Layer.provideMerge(Harness.layerWith(options)))
+  Harness.Harness | Extensions,
+  CommitError | InvalidExtension,
+  Storage | Model | Harness.Requires<Installs[number]> | RpcServer.Protocol
+> => layerRpcs(options).pipe(Layer.provideMerge(Harness.layer(options)))

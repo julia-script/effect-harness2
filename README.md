@@ -50,10 +50,9 @@ import { BunServices } from '@effect/platform-bun'
 import { Effect, Layer } from 'effect'
 import { HarnessClient, HarnessTransport } from 'effect-harness/client'
 import { CodingHandlers, CodingTools } from 'effect-harness/coding'
-import { Extensions, Generation, HarnessServer, Settings } from 'effect-harness/harness'
+import { HarnessServer } from 'effect-harness/harness'
 import { Faux, Model } from 'effect-harness/model'
 import { Storage } from 'effect-harness/storage'
-import { Registry } from 'effect-harness/task'
 
 const main = Effect.gen(function* () {
   const faux = yield* Faux.make()
@@ -62,17 +61,11 @@ const main = Effect.gen(function* () {
     Faux.message('Two files.'),
   ])
 
-  // The loop: storage, tasks, tools, model, settings.
-  const Loop = HarnessServer.layerWith().pipe(
-    Layer.provideMerge(Generation.layer),
-    Layer.provideMerge(Extensions.layerInstall(CodingTools.extension)),
-    Layer.provide(CodingHandlers.layer),
-    Layer.provideMerge(Extensions.layer),
-    Layer.provideMerge(Registry.layer()),
-    Layer.provide(Model.layer([faux.provider])),
-    Layer.provide(Settings.layer({ model: faux.ref(), extensions: ['coding-tools'] })),
-    Layer.provide(Storage.layerMemory),
-  )
+  // The loop, with the coding tools. It needs storage, a model and the tools' handlers.
+  const Loop = HarnessServer.layer({
+    extensions: [CodingTools.extension],
+    settings: { model: faux.ref() },
+  }).pipe(Layer.provide([CodingHandlers.layer, Model.layer([faux.provider]), Storage.layerMemory]))
 
   // One memory transport, shared by the loop and its client.
   const App = Layer.merge(Loop, HarnessClient.layer).pipe(
@@ -98,6 +91,18 @@ main.pipe(Effect.provide(BunServices.layer), Effect.runPromise)
 
 `BunServices.layer` gives the coding tools a file system, paths and a process spawner. To make
 it durable, swap `Storage.layerMemory` for a [store on disk](#storage).
+
+`HarnessServer.layer` builds the task registry, the extension registry and the built-in
+generation, tool and compaction tasks itself. Its options override the pieces:
+
+- `extensions`: installed before the loop opens. Their tools' handlers become requirements of
+  the layer, so a missing handler is a type error.
+- `settings`: the run settings; without it, `Settings.layer` from outside, or the defaults.
+- `tasks`: more task definitions, replacing a built-in one of the same name.
+- `initializers`, `conversationCreated`, `documentRetention`: as before.
+
+`Harness.layer` takes the same options without serving RPCs, and `HarnessServer.layerRpcs`
+serves a `Harness` you built yourself.
 
 ## Talking to a conversation
 
@@ -153,7 +158,7 @@ const Seed = Init.make('seed', Schema.Struct({ text: Schema.String }))
 const seed = Initializer.make(Seed, (tx, id, { text }) =>
   Effect.asVoid(tx.appendEntry(id, { kind: 'note', data: { text } })),
 )
-HarnessServer.layerWith({ initializers: [seed] })
+HarnessServer.layer({ initializers: [seed] })
 
 // client
 yield * client.root({ init: Init.call(Seed, { text: 'hello' }) })
@@ -206,7 +211,7 @@ const toolkit = Toolkit.make(Weather)
 export const weather = Extension.make('weather', { toolkit })
 ```
 
-Implement it with `toolkit.toLayer`, and install the extension:
+Implement it with `toolkit.toLayer`, and install the extension with the loop:
 
 ```ts
 const WeatherLive = toolkit.toLayer({
@@ -214,8 +219,11 @@ const WeatherLive = toolkit.toLayer({
     city === 'Atlantis' ? Effect.fail('No such city') : Effect.succeed({ celsius: 21 }),
 })
 
-const Install = Extensions.layerInstall(weather).pipe(Layer.provide(WeatherLive))
+const Loop = HarnessServer.layer({ extensions: [weather] }).pipe(Layer.provide(WeatherLive))
 ```
+
+`Extensions.layerInstall(weather)` installs one into a running loop instead, which is how
+extension code reloads.
 
 A conversation picks extensions by name, with `configure({ extensions })` or
 `Settings.extensions`. An extension can also carry system prompt `sections`, `hooks`, `wraps`
@@ -247,12 +255,12 @@ Mark a tool `deferred: true` to keep it out of the prompt until the model finds 
 ### Stock tools
 
 ```ts
-// read, write, edit, bash over FileSystem, Path and ChildProcessSpawner
-Extensions.layerInstall(CodingTools.extension).pipe(Layer.provide(CodingHandlers.layer))
-
-// code mode: the model writes a script that calls your tools
-Extensions.layerInstall(Codemode.extension()).pipe(
-  Layer.provide(CodemodeHandlers.layer()),
+HarnessServer.layer({
+  // read, write, edit, bash over FileSystem, Path and ChildProcessSpawner
+  // code mode: the model writes a script that calls your tools
+  extensions: [CodingTools.extension, Codemode.extension()],
+}).pipe(
+  Layer.provide([CodingHandlers.layer, CodemodeHandlers.layer()]),
   Layer.provide(CodemodeHandlers.layerSandbox()),
 )
 ```
@@ -338,12 +346,9 @@ To split them, change only the transport:
 ```ts
 // loop process
 const Server = HttpRouter.serve(
-  HarnessServer.layerWith().pipe(
+  HarnessServer.layer({ extensions: [CodingTools.extension] }).pipe(
     Layer.provide(HarnessTransport.layerWebSocketServer('/harness')),
-    Layer.provideMerge(Tasks), // Generation.layer, extensions, …
-    Layer.provideMerge(Extensions.layer),
-    Layer.provideMerge(Registry.layer()),
-    Layer.provide(Storage.layerJsonl('.harness')),
+    Layer.provide([CodingHandlers.layer, Models, Storage.layerJsonl('.harness')]),
   ),
 ).pipe(Layer.provide(BunHttpServer.layer({ port: 3000 })), Layer.provide(BunServices.layer))
 

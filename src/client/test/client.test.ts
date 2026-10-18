@@ -5,13 +5,13 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { Effect, Fiber, Layer, Queue, Schema } from 'effect'
-import { Extensions, HarnessServer, Initializer } from '../../harness/index.ts'
+import { HarnessServer, Initializer } from '../../harness/index.ts'
+import { Model } from '../../model/index.ts'
 import type { Step } from '../../harness/test/support.ts'
 import { standIn } from '../../harness/test/support.ts'
 import * as Settings from '../../harness/Settings.ts'
 import { Storage } from '../../storage/Storage.ts'
 import { ConversationId, SubmissionId } from '../../storage/schema/Ids.ts'
-import { Registry } from '../../task/index.ts'
 import { settle } from '../../task/test/support.ts'
 import { HarnessClient, HarnessTransport, Init } from '../index.ts'
 import type { HarnessClient as Client } from '../index.ts'
@@ -173,11 +173,9 @@ describe('client', () => {
     runTest((storage) =>
       Effect.gen(function* () {
         const steps = yield* Queue.unbounded<Step>()
-        const loop = HarnessServer.layerWith({}).pipe(
-          Layer.provide(Extensions.layer),
-          Layer.provide(Layer.succeed(Storage, storage)),
-          Layer.provide(Registry.layer([standIn(steps, Effect.succeed(Settings.defaults))])),
-        )
+        const loop = HarnessServer.layer({
+          tasks: [standIn(steps, Effect.succeed(Settings.defaults))],
+        }).pipe(Layer.provide([Model.layer([]), Layer.succeed(Storage, storage)]))
         const program = Effect.gen(function* () {
           yield* Layer.launch(loop).pipe(Effect.forkScoped)
           const client = yield* HarnessClient.HarnessClient

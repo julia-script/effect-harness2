@@ -8,11 +8,10 @@ import { Console, Effect, Layer, Redacted } from 'effect'
 import { HttpRouter, HttpServer } from 'effect/http'
 import { HarnessTransport } from '../../index.ts'
 import { Credentials } from '../../../credentials/index.ts'
-import { Extensions, Generation, HarnessServer, Settings } from '../../../harness/index.ts'
+import { HarnessServer } from '../../../harness/index.ts'
 import { Faux, Model } from '../../../model/index.ts'
 import { ModelError, Rejected } from '../../../model/ModelError.ts'
 import { Storage } from '../../../storage/index.ts'
-import { Registry } from '../../../task/index.ts'
 
 const credentialsUrl = process.argv[2] ?? ''
 
@@ -33,18 +32,12 @@ const loop = Effect.gen(function* () {
   const store = yield* Credentials.Credentials
   const faux = yield* Faux.make()
   yield* faux.setResponses(Array.from({ length: 50 }, () => answer(store)))
-  const settings = Layer.succeed(Settings.Current, Settings.make({ model: faux.ref() }))
-  const tasks = Generation.layer.pipe(
-    Layer.provide(Layer.succeed(Model.Model, Model.make([faux.provider]))),
-    Layer.provide(settings),
-  )
-  const harness = HarnessServer.layerWith().pipe(
-    Layer.provide(HarnessTransport.layerWebSocketServer('/harness')),
-    Layer.provideMerge(tasks),
-    Layer.provide(settings),
-    Layer.provideMerge(Extensions.layer),
-    Layer.provideMerge(Registry.layer()),
-    Layer.provide(Storage.layerMemory),
+  const harness = HarnessServer.layer({ settings: { model: faux.ref() } }).pipe(
+    Layer.provide([
+      HarnessTransport.layerWebSocketServer('/harness'),
+      Model.layer([faux.provider]),
+      Storage.layerMemory,
+    ]),
   )
   const server = HttpRouter.serve(harness, { disableListenLog: true, disableLogger: true }).pipe(
     Layer.provideMerge(BunHttpServer.layer({ port: 0, hostname: '127.0.0.1' })),

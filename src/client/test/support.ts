@@ -4,13 +4,13 @@
  */
 import { Effect, Layer, Queue } from 'effect'
 import type { Context, Scope } from 'effect'
-import { Extensions, HarnessServer } from '../../harness/index.ts'
+import { HarnessServer } from '../../harness/index.ts'
 import type { Step } from '../../harness/test/support.ts'
 import { standIn } from '../../harness/test/support.ts'
 import * as Settings from '../../harness/Settings.ts'
 import type { Service as StorageService } from '../../storage/Storage.ts'
 import { Storage } from '../../storage/Storage.ts'
-import { Registry } from '../../task/index.ts'
+import { Model } from '../../model/index.ts'
 import { HarnessClient, HarnessTransport } from '../index.ts'
 
 export interface Opened {
@@ -21,7 +21,7 @@ export interface Opened {
 /** Launch a loop over `storage` and a memory transport in the scope, and connect a client. */
 export const open = (
   storage: StorageService,
-  options: HarnessServer.Options = {},
+  options: HarnessServer.Options<readonly []> = {},
   transport: Effect.Effect<
     Context.Context<HarnessTransport.Protocols>,
     never,
@@ -31,10 +31,8 @@ export const open = (
   Effect.gen(function* () {
     const steps = yield* Queue.unbounded<Step>()
     const settings = Effect.succeed(Settings.defaults)
-    const loop = HarnessServer.layerWith(options).pipe(
-      Layer.provide(Extensions.layer),
-      Layer.provide(Layer.succeed(Storage, storage)),
-      Layer.provide(Registry.layer([standIn(steps, settings)])),
+    const loop = HarnessServer.layer({ ...options, tasks: [standIn(steps, settings)] }).pipe(
+      Layer.provide([Model.layer([]), Layer.succeed(Storage, storage)]),
     )
     const protocols = yield* transport
     yield* Layer.launch(loop).pipe(

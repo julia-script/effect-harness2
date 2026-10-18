@@ -3,7 +3,7 @@
  * stand-in for the generation task.
  */
 import { Effect, Layer, Queue } from 'effect'
-import type { Scope } from 'effect'
+import type { Context, Scope } from 'effect'
 import { HarnessServer } from '../../harness/index.ts'
 import type { Step } from '../../harness/test/support.ts'
 import { standIn } from '../../harness/test/support.ts'
@@ -22,6 +22,11 @@ export interface Opened {
 export const open = (
   storage: StorageService,
   options: HarnessServer.Options = {},
+  transport: Effect.Effect<
+    Context.Context<HarnessTransport.Protocols>,
+    never,
+    Scope.Scope
+  > = HarnessTransport.makeMemory,
 ): Effect.Effect<Opened, never, Scope.Scope> =>
   Effect.gen(function* () {
     const steps = yield* Queue.unbounded<Step>()
@@ -30,13 +35,13 @@ export const open = (
       Layer.provide(Layer.succeed(Storage, storage)),
       Layer.provide(Registry.layer([standIn(steps, settings)])),
     )
-    const transport = yield* HarnessTransport.makeMemory
+    const protocols = yield* transport
     yield* Layer.launch(loop).pipe(
-      Effect.provideContext(transport),
+      Effect.provideContext(protocols),
       Effect.orDie,
       Effect.forkScoped,
     )
-    const client = yield* Effect.provideContext(HarnessClient.make, transport)
+    const client = yield* Effect.provideContext(HarnessClient.make, protocols)
     return {
       client,
       answer: (text) => Effect.asVoid(Queue.offer(steps, { kind: 'answer', text })),

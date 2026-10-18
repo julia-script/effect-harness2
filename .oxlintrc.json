@@ -31,7 +31,8 @@
         "src/storage/test/sql/**",
         "src/client/**",
         "src/harness/HarnessServer.ts",
-        "src/harness/internal/server.ts"
+        "src/harness/internal/server.ts",
+        "src/credentials/**"
       ],
       "rules": {
         "effecttsgo/unstable-api-usage": "off"

@@ -1,15 +1,434 @@
 # effect-harness
 
-To install dependencies:
+A durable agent harness, written in [Effect](https://effect.website).
+
+Every turn, model request and tool call is a task with a checkpoint in storage. Kill the process
+in the middle of a tool round, start it again, and the conversation picks up where it stopped.
+Safe tool calls run again, unsafe ones end as interrupted, and the model is told.
+
+It's a port of [pi](https://github.com/julia-script/pi)'s `packages/durable`, reworked to fit
+Effect: services and layers, Schemas at every boundary, typed errors, and nothing that throws.
+
+```
+client ──transport──▶ loop ──▶ Session ──▶ Storage
+                       │                    memory · JSONL · SQLite · Postgres
+                       ├─ Scheduler (durable tasks)
+                       ├─ Model ──▶ providers (effect/ai, Faux)
+                       └─ Extensions ──▶ tools, sections, hooks
+```
+
+- **Durable.** Conversations, documents and tasks live in one commit log. Each change is one
+  atomic commit.
+- **Built for a split.** The client only knows request schemas. Run it in the same process, a
+  browser, or another machine, and change nothing but the transport.
+- **Your tools.** Declare a tool as Schemas and implement it as a layer. It runs as its own
+  durable task, can call other tools, and can stay hidden until `tool_search` loads it.
+- **Batteries.** Compaction, retries, usage tracking, live views, coding tools
+  (`read`/`write`/`edit`/`bash`) and code mode.
+
+## Contents
+
+- [Quickstart](#quickstart)
+- [Talking to a conversation](#talking-to-a-conversation)
+- [Watching](#watching)
+- [Tools](#tools)
+- [Models](#models)
+- [Credentials](#credentials)
+- [Storage](#storage)
+- [Splitting the client and the loop](#splitting-the-client-and-the-loop)
+- [Under the harness](#under-the-harness)
+- [Entry points](#entry-points)
+- [How it differs from pi](#how-it-differs-from-pi)
+- [Development](#development)
+
+## Quickstart
+
+A loop and a client in one process, with the scripted `Faux` model and the coding tools.
+
+```ts
+import { BunServices } from '@effect/platform-bun'
+import { Effect, Layer } from 'effect'
+import { HarnessClient, HarnessTransport } from 'effect-harness/client'
+import { CodingHandlers, CodingTools } from 'effect-harness/coding'
+import { Extensions, Generation, HarnessServer, Settings } from 'effect-harness/harness'
+import { Faux, Model } from 'effect-harness/model'
+import { Storage } from 'effect-harness/storage'
+import { Registry } from 'effect-harness/task'
+
+const main = Effect.gen(function* () {
+  const faux = yield* Faux.make()
+  yield* faux.setResponses([
+    Faux.message(Faux.toolCall('bash', { command: 'ls' }), { stopReason: 'toolUse' }),
+    Faux.message('Two files.'),
+  ])
+
+  // The loop: storage, tasks, tools, model, settings.
+  const Loop = HarnessServer.layerWith().pipe(
+    Layer.provideMerge(Generation.layer),
+    Layer.provideMerge(Extensions.layerInstall(CodingTools.extension)),
+    Layer.provide(CodingHandlers.layer),
+    Layer.provideMerge(Extensions.layer),
+    Layer.provideMerge(Registry.layer()),
+    Layer.provide(Model.layer([faux.provider])),
+    Layer.provide(Settings.layer({ model: faux.ref(), extensions: ['coding-tools'] })),
+    Layer.provide(Storage.layerMemory),
+  )
+
+  // One memory transport, shared by the loop and its client.
+  const App = Layer.merge(Loop, HarnessClient.layer).pipe(
+    Layer.provide(HarnessTransport.layerMemory),
+  )
+
+  const chat = Effect.gen(function* () {
+    const client = yield* HarnessClient.HarnessClient
+    const root = yield* client.root()
+
+    const submission = yield* root.submit({ type: 'input', content: 'What is here?' })
+    yield* submission.wait // { status: 'done', ... }
+
+    const { items } = yield* root.entries({ order: 'ascending' }, 50)
+    // pi.user, pi.system, pi.assistant, pi.tool-result, pi.assistant
+  })
+
+  yield* chat.pipe(Effect.provide(App))
+})
+
+main.pipe(Effect.provide(BunServices.layer), Effect.runPromise)
+```
+
+`BunServices.layer` gives the coding tools a file system, paths and a process spawner. To make
+it durable, swap `Storage.layerMemory` for a [store on disk](#storage).
+
+## Talking to a conversation
+
+`client.root()` gets the reserved root conversation. You can also create, fork and look up
+others. A handle is just an ID, so it survives restarts.
+
+```ts
+const root = yield * client.root()
+
+yield *
+  root.configure({
+    model: { provider: 'anthropic', modelId: 'claude-sonnet-5-5' },
+    reasoning: 'high',
+    instructions: 'Be brief.',
+    extensions: { add: ['coding-tools'] },
+  })
+yield * root.agent
+// { tools: ['read', 'write', 'edit', 'bash'], ... }
+```
+
+Submissions queue while the conversation is busy, unless you ask them not to:
+
+```ts
+const sub = yield * root.submit({ type: 'input', content: 'next?' })
+yield * root.submit({ type: 'input', content: 'now!', whenBusy: 'reject' })
+// fails with ConversationBusy
+
+// After a restart, find it again by ID.
+const again = yield * client.submission(sub.id)
+yield * again!.wait
+```
+
+Everything else is on the handle too:
+
+```ts
+yield * root.fork(entryId, { ownership: { kind: 'ownerless' } })
+yield * root.compact('Keep the API decisions.')
+yield * root.reset('Handoff: we picked SQLite.')
+yield * root.abort() // stop live work
+yield * root.waitForIdle
+```
+
+### Named inits
+
+A client can ask the loop to seed a new conversation in the same commit that creates it. The
+client declares the `Init`, and the loop implements it.
+
+```ts
+// shared
+const Seed = Init.make('seed', Schema.Struct({ text: Schema.String }))
+
+// loop
+const seed = Initializer.make(Seed, (tx, id, { text }) =>
+  Effect.asVoid(tx.appendEntry(id, { kind: 'note', data: { text } })),
+)
+HarnessServer.layerWith({ initializers: [seed] })
+
+// client
+yield * client.root({ init: Init.call(Seed, { text: 'hello' }) })
+```
+
+## Watching
+
+Views and events are scoped streams. Each starts from a snapshot, and after that only changes
+cross the transport.
+
+```ts
+yield *
+  Effect.scoped(
+    Effect.gen(function* () {
+      const view = yield* root.view
+      view.value.entries // committed now
+
+      const events = yield* root.events
+      yield* events.batches.pipe(
+        Stream.flattenIterable,
+        Stream.runForEach((event) =>
+          event.type === 'message_update' ? Effect.log(event.changes) : Effect.void,
+        ),
+      )
+    }),
+  )
+```
+
+Events follow pi's agent events: `run_start`, `message_update`, `tool_execution_end`,
+`compaction_start`, `usage_changed` and the rest. `client.taskGraph` watches every live task.
+
+## Tools
+
+A tool's declaration is plain data: Schemas for its parameters, result, failure and config. You
+can import it anywhere, including the client. Its implementation lives in the loop.
+
+```ts
+import { Tool, Toolkit } from 'effect-harness/tool'
+import { Extension } from 'effect-harness/harness'
+
+const Weather = Tool.make('weather', {
+  description: 'Current weather for a city.',
+  parameters: Schema.Struct({ city: Schema.String }),
+  success: Schema.Struct({ celsius: Schema.Number }),
+  failure: Schema.String,
+  replay: 'safe', // run it again after a crash
+})
+
+const toolkit = Toolkit.make(Weather)
+export const weather = Extension.make('weather', { toolkit })
+```
+
+Implement it with `toolkit.toLayer`, and install the extension:
+
+```ts
+const WeatherLive = toolkit.toLayer({
+  weather: ({ city }) =>
+    city === 'Atlantis' ? Effect.fail('No such city') : Effect.succeed({ celsius: 21 }),
+})
+
+const Install = Extensions.layerInstall(weather).pipe(Layer.provide(WeatherLive))
+```
+
+A conversation picks extensions by name, with `configure({ extensions })` or
+`Settings.extensions`. An extension can also carry system prompt `sections`, `hooks`, `wraps`
+around other extensions' tools, and its own `tasks`.
+
+A handler can call other tools. Each call is its own durable task:
+
+```ts
+const Trip = Tool.make('trip', {
+  description: 'Plan a trip.',
+  parameters: Schema.Struct({ cities: Schema.Array(Schema.String) }),
+  success: Schema.Array(Schema.Json),
+})
+
+const TripLive = Toolkit.make(Trip).toLayer({
+  trip: ({ cities }) =>
+    Effect.forEach(cities, (city) =>
+      Call.execute('weather', { city }).pipe(
+        Effect.map((outcome) => outcome.value ?? null),
+        Effect.orDie,
+      ),
+    ),
+})
+```
+
+Mark a tool `deferred: true` to keep it out of the prompt until the model finds it. Install
+`ToolSearch.extension` with `ToolSearch.layer` to give the model `tool_search`.
+
+### Stock tools
+
+```ts
+// read, write, edit, bash over FileSystem, Path and ChildProcessSpawner
+Extensions.layerInstall(CodingTools.extension).pipe(Layer.provide(CodingHandlers.layer))
+
+// code mode: the model writes a script that calls your tools
+Extensions.layerInstall(Codemode.extension()).pipe(
+  Layer.provide(CodemodeHandlers.layer()),
+  Layer.provide(CodemodeHandlers.layerSandbox()),
+)
+```
+
+Code mode runs on `@earendil-works/pi-codemode`. Every call a script makes is journaled, so a
+script that crashes halfway replays without running its calls twice.
+
+## Models
+
+The `Model` service sends each request to a provider by name. Responses stream as deltas and
+end with a `done` event.
+
+`LanguageModelProvider` wraps any effect/ai `LanguageModel`. Our loop runs the tools, so tool
+resolution is off. `languageModel` runs once per request, so read the credential there:
+
+```ts
+// Yours to write:
+// anthropicModel(modelId, credential): Effect<LanguageModel, ModelError>
+// toModelError(error: CredentialsError): ModelError
+
+const Anthropic = Effect.gen(function* () {
+  const credentials = yield* Credentials.Credentials
+  return LanguageModelProvider.make({
+    name: 'anthropic',
+    api: 'anthropic-messages',
+    models: [{ id: 'claude-sonnet-5-5', reasoning: true, contextWindow: 200_000 }],
+    languageModel: (model) =>
+      credentials.get('anthropic').pipe(
+        Effect.mapError(toModelError),
+        Effect.flatMap((credential) => anthropicModel(model.id, credential)),
+      ),
+  })
+})
+
+const ModelLive = Model.layerEffect([Anthropic]).pipe(Layer.provide(Credentials.layerConfig()))
+```
+
+`Faux` is pi-ai's scripted provider, for tests. It can stream text, thinking and tool calls,
+fail, or answer from the request.
+
+## Credentials
+
+One `Credentials` service. The layer you pick decides where the secrets live:
+
+| Layer                  | Where                                     |
+| ---------------------- | ----------------------------------------- |
+| `layerMemory(initial)` | in memory                                 |
+| `layerConfig(names?)`  | `ConfigProvider` (.env), read-only        |
+| `layerRpc`             | a remote store, over any transport        |
+| `layerServer`          | serves the store in context to `layerRpc` |
+
+```ts
+const store = yield * Credentials.Credentials
+yield * store.set('anthropic', { type: 'api_key', key: Redacted.make('sk-…') })
+yield * store.list // [{ provider: 'anthropic', type: 'api_key' }]
+```
+
+Secrets decode to `Redacted`. `makeResolver({ refresh })` refreshes OAuth tokens before they
+expire: one refresh per provider at a time, written back with a compare-and-set `update`.
+
+## Storage
+
+All three stores pass the same conformance suite and use pi's file and table formats.
+
+```ts
+Storage.layerMemory
+
+// JSONL files in a directory, crash-recovering
+Storage.layerJsonl('.harness').pipe(Layer.provide(BunServices.layer))
+
+// any effect/sql SQLite or Postgres client
+Storage.layerSql({ prefix: 'harness_' }).pipe(
+  Layer.provide(SqliteClient.layer({ filename: 'harness.db' })),
+)
+```
+
+## Splitting the client and the loop
+
+There are two deployable parts, the client and the loop. In one process they talk over
+`HarnessTransport.layerMemory`, which passes values through queues without encoding them.
+To split them, change only the transport:
+
+```ts
+// loop process
+const Server = HttpRouter.serve(
+  HarnessServer.layerWith().pipe(
+    Layer.provide(HarnessTransport.layerWebSocketServer('/harness')),
+    Layer.provideMerge(Tasks), // Generation.layer, extensions, …
+    Layer.provideMerge(Extensions.layer),
+    Layer.provideMerge(Registry.layer()),
+    Layer.provide(Storage.layerJsonl('.harness')),
+  ),
+).pipe(Layer.provide(BunHttpServer.layer({ port: 3000 })), Layer.provide(BunServices.layer))
+
+// client: browser, CLI, another machine
+const Client = HarnessClient.layer.pipe(
+  Layer.provide(HarnessTransport.layerWebSocket('ws://localhost:3000/harness')),
+)
+```
+
+`effect-harness/client` imports nothing the loop runs. A test enforces this, so the client
+bundles for a browser. The same transports carry `CredentialsRpcs`, so several loops can share
+one credential store.
+
+## Under the harness
+
+The harness is built from layers you can use on their own.
+
+**Session.** One mutation line over a `Storage`. Each `commit` is one atomic transaction over
+conversations, entries, submissions, tasks and documents.
+
+```ts
+const Counter = Document.make<{ count: number }>({
+  kind: 'app.counter',
+  version: 1,
+  scope: 'session',
+  initial: () => Effect.succeed({ count: 0 }),
+})
+
+yield *
+  session.commit((tx) =>
+    Effect.map(tx.doc(Counter), (draft) => {
+      draft.count += 1 // recorded as delta ops
+    }),
+  )
+
+const watch = yield * session.watchDoc(Counter) // scoped
+watch?.changes // Stream<{ value, ops }>
+```
+
+Documents are scoped to the session, a conversation (latest or rewindable, with fork rules), or
+a task. A draft is a proxy that records edits as pi-identical ops (a port of Chord's delta
+tracker).
+
+**Tasks.** `Task.make` defines a durable state machine: a phase map over a JSON checkpoint,
+plus an abort handler and migrations. The `Scheduler` runs tasks from the `Registry`, and
+handles ownership, waits, abort cascades and restarts. The generation, tool and compaction
+tasks are all built this way.
+
+## Entry points
+
+| Import                       | What                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------ |
+| `effect-harness/client`      | `HarnessClient`, `HarnessRpcs`, transports, `Init`                                               |
+| `effect-harness/harness`     | `Harness`, `HarnessServer`, `Generation`, `Compaction`, `Extension(s)`, `Settings`, `ToolSearch` |
+| `effect-harness/tool`        | `Tool`, `Toolkit`, `ToolResult`, `Call`, `ToolTask`                                              |
+| `effect-harness/model`       | `Model`, `Message`, `LanguageModelProvider`, `Faux`                                              |
+| `effect-harness/credentials` | `Credentials`, `Credential`, `CredentialsRpcs`                                                   |
+| `effect-harness/coding`      | `CodingTools`, `CodingHandlers`                                                                  |
+| `effect-harness/codemode`    | `Codemode`, `CodemodeHandlers`                                                                   |
+| `effect-harness/session`     | `Session`, `Document`, `Observation`                                                             |
+| `effect-harness/task`        | `Task`, `Registry`, `Scheduler`, `Hook`                                                          |
+| `effect-harness/storage`     | `Storage` (memory, JSONL, SQL), and `/schema`                                                    |
+| `effect-harness/delta`       | `Tracker`, `Ops`                                                                                 |
+
+## How it differs from pi
+
+Field names, entry kinds and storage formats match pi. What changed:
+
+- **Cancellation is hybrid.** A durable abort mark still drives the abort handler, so pending
+  and crashed tasks can be aborted. A live run is stopped by Effect interruption.
+- **Credentials replace the provider manager.** One service, many layers, read fresh before
+  each request.
+- **No execution environment.** Tools depend on services like `FileSystem`, and the layer you
+  provide decides where they run.
+- **Our own tool API.** It isn't effect/ai's toolkit, so handlers get the call ID and config,
+  and every value crosses the task boundary encoded.
+- **Streams instead of Chord's replicated state** for watches and views.
+- **Errors, not throws.** A bad draft write fails the commit with `InvalidWrite`.
+
+## Development
 
 ```bash
 bun install
+bun run check   # format, lint, typecheck: must pass before a commit
+bun run test    # bun test src
 ```
 
-To run:
-
-```bash
-bun run src/index.ts
-```
-
-This project was created using `bun init` in bun v1.4.2. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+`repos/` vendors Effect and pi as read-only references.

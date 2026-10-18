@@ -1,6 +1,8 @@
 /**
  * The loop serving its clients: `HarnessRpcs` on the `Harness`, over the `RpcServer.Protocol` in
- * context. Run it with `Layer.launch`; clients reach it through the matching transport.
+ * context. Run it with `Layer.launch`; clients reach it through the matching transport. In its own
+ * process, give it `HarnessTransport.layerWebSocketServer(path)` and serve it with
+ * `HttpRouter.serve` on the platform's HTTP server.
  */
 import { Layer } from 'effect'
 import { RpcServer } from 'effect/rpc'

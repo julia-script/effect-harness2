@@ -1,12 +1,18 @@
 /**
  * Transports between a client and the loop. Both sides take their RPC protocol from context: the
  * loop an `RpcServer.Protocol`, the client an `RpcClient.Protocol`. In one process they share
- * `layerMemory`; split, they use Effect's HTTP or WebSocket protocols instead.
+ * `layerMemory`; split, the loop serves `layerWebSocketServer` on an HTTP server and clients
+ * connect with `layerWebSocket`.
+ *
+ * The protocols carry any RPC group, so a credential store served remotely (`Credentials.
+ * layerServer`, `Credentials.layerRpc`) uses the same transports at its own path.
  */
 import { Context, Effect, Layer, Queue, Schema } from 'effect'
 import type { Scope } from 'effect'
-import { RpcClient, RpcServer } from 'effect/rpc'
-import type { RpcMessage, RpcSerialization } from 'effect/rpc'
+import type { HttpRouter } from 'effect/http'
+import { RpcClient, RpcSerialization, RpcServer } from 'effect/rpc'
+import type { RpcMessage } from 'effect/rpc'
+import { Socket } from 'effect/socket'
 
 /** Both ends of a transport. */
 export type Protocols = RpcServer.Protocol | RpcClient.Protocol
@@ -78,3 +84,24 @@ export const makeMemoryEncoded: Effect.Effect<
 
 /** `makeMemory` as a Layer: provide it once to both the loop and its clients. */
 export const layerMemory: Layer.Layer<Protocols> = Layer.effectContext(makeMemory)
+
+/**
+ * A client protocol over a WebSocket to `url`, such as `ws://localhost:3000/harness`, with JSON
+ * frames. It uses the global `WebSocket`, so it runs in browsers, Bun and Deno alike, and
+ * reconnects after transient failures.
+ */
+export const layerWebSocket = (url: string): Layer.Layer<RpcClient.Protocol> =>
+  RpcClient.layerProtocolSocket({ retryTransientErrors: true }).pipe(
+    Layer.provide(Socket.layerWebSocket(url)),
+    Layer.provide(Socket.layerWebSocketConstructorGlobal),
+    Layer.provide(RpcSerialization.layerJson),
+  )
+
+/**
+ * A server protocol that accepts WebSockets at `path` of the `HttpRouter` in context, with JSON
+ * frames. Serve the router with `HttpRouter.serve` and the platform's HTTP server.
+ */
+export const layerWebSocketServer = (
+  path: HttpRouter.PathInput,
+): Layer.Layer<RpcServer.Protocol, never, HttpRouter.HttpRouter> =>
+  RpcServer.layerProtocolWebsocket({ path }).pipe(Layer.provide(RpcSerialization.layerJson))

@@ -19,7 +19,7 @@ const user = (text: string): Message.Message => ({ role: 'user', content: text, 
 const ask = <R>(provider: Model.Provider<R>, modelId: string, options: Model.Options = {}) =>
   Effect.gen(function* () {
     const model = yield* Model.make([provider])
-    const info = model.info(OpenAi.ref(modelId))
+    const info = yield* model.info(OpenAi.ref(modelId))
     if (info === undefined) return yield* Effect.die(`no ${modelId}`)
     const request = { model: OpenAi.ref(modelId), messages: [user('hi')], options }
     return yield* Model.collect(model.stream(request), info)

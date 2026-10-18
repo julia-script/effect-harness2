@@ -182,8 +182,10 @@ export interface Listable<out R = never> extends Provider<R> {
 }
 
 export interface Service {
-  readonly models: ReadonlyArray<Info>
-  readonly info: (ref: Ref) => Info | undefined
+  /** The models its providers serve now. */
+  readonly models: Effect.Effect<ReadonlyArray<Info>>
+  /** The model `ref` names, if a provider serves it now. */
+  readonly info: (ref: Ref) => Effect.Effect<Info | undefined>
   /** Stream one response; an unknown model fails `UnknownModel`. */
   readonly stream: (request: Request) => Stream.Stream<Event, ModelError>
   /** Fetch a deferred response; providers without deferred responses fail `Rejected`. */
@@ -200,12 +202,32 @@ export class Model extends Context.Service<Model, Service>()('effect-harness/mod
  */
 export const make = <R = never>(
   providers: Iterable<Provider<R>>,
-): Effect.Effect<Service, never, R> =>
-  Effect.map(Effect.context<R>(), (context) => route.make(providers, context))
+): Effect.Effect<Service, never, R> => {
+  const routes = Effect.succeed(route.routes(providers))
+  return Effect.map(Effect.context<R>(), (context) => route.make(routes, context))
+}
 
 /** A `Model` over `providers`; it needs what they need. */
 export const layer = <R = never>(providers: Iterable<Provider<R>>): Layer.Layer<Model, never, R> =>
   Layer.effect(Model, make(providers))
+
+/**
+ * A `Model` over the providers `current` reads, at each call: for a host whose people add and
+ * remove accounts while the loop runs, such as from a `SubscriptionRef`. Build each provider once,
+ * when it is added, and keep it: a provider holds state, such as its token refresh lock. A request
+ * whose provider was removed fails `UnknownModel`, and its run ends `no_model`.
+ */
+export const makeDynamic = <R = never>(
+  current: Effect.Effect<Iterable<Provider<R>>>,
+): Effect.Effect<Service, never, R> =>
+  Effect.map(Effect.context<R>(), (context) =>
+    route.make(Effect.map(current, route.routes), context),
+  )
+
+/** `makeDynamic` as a Layer; it needs what the providers need. */
+export const layerDynamic = <R = never>(
+  current: Effect.Effect<Iterable<Provider<R>>>,
+): Layer.Layer<Model, never, R> => Layer.effect(Model, makeDynamic(current))
 
 /**
  * The response after each event: partials while it streams (`pending`), then the final message.

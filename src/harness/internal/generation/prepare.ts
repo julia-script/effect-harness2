@@ -144,7 +144,7 @@ export const preparePhase =
       const { checkpoint } = task.state
       const agent = yield* agentOf(env, runtime)
       const ref = agent.model
-      const info = ref === undefined ? undefined : env.model.info(ref)
+      const info = ref === undefined ? undefined : yield* env.model.info(ref)
       if (ref === undefined || info === undefined) return yield* failNoModel(runtime, ref)
       const ready = yield* checkCompacted(runtime, checkpoint)
       return yield* ready

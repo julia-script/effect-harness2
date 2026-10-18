@@ -64,7 +64,7 @@ const selectPhase = (env: Env) => (task: Phase<'select'>, runtime: CompactionRun
   Effect.gen(function* () {
     const agent = yield* agentOf(env, runtime)
     const ref = agent.model
-    const info = ref === undefined ? undefined : env.model.info(ref)
+    const info = ref === undefined ? undefined : yield* env.model.info(ref)
     if (ref === undefined || info === undefined) return yield* failNoModel(runtime, ref)
     const policy = compactionFor(yield* env.settings, ref)
     const view = yield* readView(runtime)
@@ -217,7 +217,7 @@ const settleAttempt = (
 const summarizePhase = (env: Env) => (task: Phase<'summarize'>, runtime: CompactionRuntime) =>
   Effect.gen(function* () {
     const { phase: _phase, ...request } = task.state.checkpoint
-    const info = env.model.info(request.model)
+    const info = yield* env.model.info(request.model)
     if (info === undefined) return yield* failNoModel(runtime, request.model)
     const view = yield* readView(runtime, request.tail)
     const cut = view.entries.findIndex((entry) => entry.id === request.firstKept)

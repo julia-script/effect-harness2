@@ -4,7 +4,7 @@
  * responses.
  */
 import { describe, expect, test } from 'bun:test'
-import { Effect, Stream } from 'effect'
+import { Effect, Stream, SubscriptionRef } from 'effect'
 import { Faux, Model, ModelError, Transcript } from '../index.ts'
 import type { Message } from '../index.ts'
 
@@ -80,13 +80,13 @@ describe('Model over Faux', () => {
         const second = yield* Faux.make({ provider: 'b', models: [{ id: 'm2' }, { id: 'm3' }] })
         const replaced = yield* Faux.make({ provider: 'a', models: [{ id: 'm4' }] })
         const model = yield* Model.make([first.provider, second.provider, replaced.provider])
-        expect(model.models.map(({ provider, id }) => `${provider}/${id}`)).toEqual([
+        expect((yield* model.models).map(({ provider, id }) => `${provider}/${id}`)).toEqual([
           'a/m4',
           'b/m2',
           'b/m3',
         ])
-        expect(model.info({ provider: 'b', modelId: 'm3' })?.contextWindow).toBe(128_000)
-        expect(model.info({ provider: 'a', modelId: 'm1' })).toBeUndefined()
+        expect((yield* model.info({ provider: 'b', modelId: 'm3' }))?.contextWindow).toBe(128_000)
+        expect(yield* model.info({ provider: 'a', modelId: 'm1' })).toBeUndefined()
 
         yield* second.setResponses([Faux.message('from b')])
         const response = yield* Model.collect(
@@ -101,6 +101,42 @@ describe('Model over Faux', () => {
           ),
         )
         expect(error.reason).toMatchObject({ _tag: 'UnknownModel', provider: 'c', modelId: 'x' })
+      }),
+    ))
+
+  test('routes to the providers a dynamic set holds at each call', () =>
+    run(
+      Effect.gen(function* () {
+        const work = yield* Faux.make({ provider: 'work', models: [{ id: 'm1' }] })
+        const home = yield* Faux.make({ provider: 'home', models: [{ id: 'm1' }] })
+        const providers = yield* SubscriptionRef.make<ReadonlyArray<Model.Provider>>([
+          work.provider,
+        ])
+        const model = yield* Model.makeDynamic(SubscriptionRef.get(providers))
+        expect(yield* model.info(home.ref('m1'))).toBeUndefined()
+
+        yield* SubscriptionRef.set(providers, [work.provider, home.provider])
+        yield* home.setResponses([Faux.message('from home')])
+        const info = yield* model.info(home.ref('m1'))
+        const response = yield* Model.collect(
+          model.stream({ model: home.ref('m1'), messages: [user('hi')] }),
+          home.models[0],
+        )
+        expect([info?.provider, response.content]).toEqual([
+          'home',
+          [{ type: 'text', text: 'from home' }],
+        ])
+
+        // A removed provider's requests fail as an unknown model.
+        yield* SubscriptionRef.set(providers, [home.provider])
+        const error = yield* Effect.flip(
+          Model.collect(
+            model.stream({ model: work.ref('m1'), messages: [user('hi')] }),
+            work.models[0],
+          ),
+        )
+        expect(error.reason).toMatchObject({ _tag: 'UnknownModel', provider: 'work' })
+        expect((yield* model.models).map(({ provider }) => provider)).toEqual(['home'])
       }),
     ))
 

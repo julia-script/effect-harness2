@@ -8,29 +8,30 @@
  * outcome in one commit. Every way a call can go wrong still answers it with a result entry, so
  * the model always sees one:
  *
- * - `tool_unavailable`: no tool of that name, or no handler for it.
- * - `invalid_arguments`: the arguments do not decode.
+ * - `tool_unavailable`: no tool of that name, or no implementation for it.
+ * - `invalid_arguments`: the arguments do not decode; `invalid_config`: its config does not.
  * - The tool's declared failure: an error result with the encoded failure; the task completes.
- * - `tool_error`: the handler died, failed with an `AiError`, or returned a value its Schema
- *   cannot encode; the task ends `failed`.
+ * - `tool_error`: the handler died, or returned a value its Schema cannot encode; the task ends
+ *   `failed`.
  * - `interrupted`: a crash stopped the call after intent and the tool is not replay-safe; on
- *   recovery the `execute` phase answers it instead of running it again. A replay-safe tool
- *   (annotated `Tool.Idempotent`, both when intent was recorded and now) runs again.
+ *   recovery the `execute` phase answers it instead of running it again. A tool declared with
+ *   `replay: 'safe'`, both when intent was recorded and now, runs again.
  * - `aborted`, or on an abandon after restart `interrupted` and `abandoned`: the abort handler.
  *
- * The task needs no services: `make` closes over the handlers, and `layer` installs it in the
- * `Registry` from the handlers a `Toolkit.toLayer()` provides.
+ * The task needs no services: `make` closes over the implementations, and `layer` installs it in
+ * the `Registry` from the implementations a `Toolkit.toLayer()` provides. Config is given at
+ * install, encoded; per-conversation config comes with agents.
  */
 import { Effect, Layer, Schema } from 'effect'
 import type { Context } from 'effect'
-import type { Tool, Toolkit } from 'effect/ai'
 import type { TaskKind } from '../session/Session.ts'
 import { EntryId } from '../storage/schema/Ids.ts'
 import { JsonObject } from '../storage/schema/Json.ts'
 import { Registry } from '../task/Registry.ts'
 import * as Task from '../task/Task.ts'
 import * as internal from './internal/task.ts'
-import type { Declared } from './Tool.ts'
+import type * as Tool from './Tool.ts'
+import type * as Toolkit from './Toolkit.ts'
 
 /** The task kind. */
 export const name = internal.NAME
@@ -63,20 +64,34 @@ export const kind: TaskKind<Input> = {
   initial: () => ({ phase: 'call' }),
 }
 
-/** The tool task over the tools of `toolkit` and their `handlers`. */
-export const make = <Tools extends Record<string, Declared>>(
-  toolkit: Toolkit.Toolkit<Tools>,
-  handlers: Context.Context<Tool.HandlersFor<Tools>>,
-): ToolTask => Task.make(internal.definition(Object.values(toolkit.tools), handlers))
+/** Each tool's config, encoded, by name; a tool left out gets `{}`. */
+export type Config<Tools extends Record<string, Tool.Any>> = {
+  readonly [Name in keyof Tools]?: Tools[Name]['config']['Encoded']
+}
 
-/** Install the tool task in the `Registry`, over the handlers `toolkit.toLayer()` provides. */
-export const layer = <Tools extends Record<string, Declared>>(
+export interface Options<Tools extends Record<string, Tool.Any>> {
+  readonly config?: Config<Tools>
+}
+
+/** The tool task over the tools of `toolkit` and their `implementations`. */
+export const make = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.Toolkit<Tools>,
-): Layer.Layer<never, never, Registry | Tool.HandlersFor<Tools>> =>
+  implementations: Context.Context<Toolkit.Implementation<Toolkit.Names<Tools>>>,
+  options: Options<Tools> = {},
+): ToolTask =>
+  Task.make(
+    internal.definition(Object.values(toolkit.tools), implementations, options.config ?? {}),
+  )
+
+/** Install the tool task in the `Registry`, over the implementations `toolkit.toLayer()` provides. */
+export const layer = <Tools extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.Toolkit<Tools>,
+  options: Options<Tools> = {},
+): Layer.Layer<never, never, Registry | Toolkit.Implementation<Toolkit.Names<Tools>>> =>
   Layer.effectDiscard(
     Effect.gen(function* () {
-      const handlers = yield* Effect.context<Tool.HandlersFor<Tools>>()
+      const implementations = yield* Effect.context<Toolkit.Implementation<Toolkit.Names<Tools>>>()
       const registry = yield* Registry
-      yield* registry.install(make(toolkit, handlers))
+      yield* registry.install(make(toolkit, implementations, options))
     }),
   )

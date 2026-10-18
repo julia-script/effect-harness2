@@ -6,7 +6,6 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { Deferred, Effect, Exit, Layer, Schema } from 'effect'
-import { Tool as AiTool } from 'effect/ai'
 import {
   conversation,
   eventually,
@@ -42,6 +41,43 @@ describe('tool task', () => {
           content: [{ type: 'text', text: 'contents of a.txt' }],
         })
         expect(diagnostics).toEqual([])
+      }),
+    ))
+
+  test("passes the tool's config to its handler", () =>
+    runTest((storage) =>
+      Effect.gen(function* () {
+        const current = yield* script
+        const configured = yield* open(storage, [
+          yield* tasks(current, { config: { read: { root: '/srv/' } } }),
+        ])
+        const id = yield* call(
+          configured.session,
+          yield* conversation(configured.session),
+          'read',
+          {
+            path: 'a.txt',
+          },
+        )
+        const { state } = yield* configured.scheduler.waitForTask(id)
+        const { message } = yield* answer(configured.session, state.outcome)
+        expect(text(message)).toEqual(['contents of /srv/a.txt'])
+      }),
+    ))
+
+  test('answers a call whose config does not decode with invalid_config', () =>
+    runTest((storage) =>
+      Effect.gen(function* () {
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- an invalid config is the point
+        const config = { read: { root: 1 } } as unknown as ToolTask.Config<typeof toolkit.tools>
+        const { session, scheduler } = yield* open(storage, [
+          yield* tasks(yield* script, { config }),
+        ])
+        const id = yield* call(session, yield* conversation(session), 'read', { path: 'a.txt' })
+        const { state } = yield* scheduler.waitForTask(id)
+        expect(state.outcome.status).toBe('completed')
+        const { diagnostics } = yield* answer(session, state.outcome)
+        expect(diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['invalid_config'])
       }),
     ))
 
@@ -198,8 +234,7 @@ describe('Tool', () => {
       description: 'Read a file',
       parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
     })
-    expect(Tool.isReplaySafe(Read)).toBe(false)
-    expect(Tool.isReplaySafe(Read.annotate(AiTool.Idempotent, true))).toBe(true)
-    expect(Tool.outputLimits(Read)).toEqual(Tool.defaultOutputLimits)
+    expect(Read.replay).toBe('unsafe')
+    expect(Read.outputLimits).toEqual(Tool.defaultOutputLimits)
   })
 })

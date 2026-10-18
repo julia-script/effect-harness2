@@ -3,8 +3,11 @@
  * model-issued call durably.
  */
 
-/** Declaration helpers over effect/ai `Tool`: output limits, replay policy, transcript form. */
+/** Tool declarations: Schemas, config, replay policy, output limits. */
 export * as Tool from './Tool.ts'
+
+/** Sets of tools, and their implementations. */
+export * as Toolkit from './Toolkit.ts'
 
 /** What a call returns to the model, and its `pi.tool-result` entry. */
 export * as ToolResult from './ToolResult.ts'

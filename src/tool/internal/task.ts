@@ -8,13 +8,12 @@ import type { ToolCall } from '../../model/Message.ts'
 import type { Tx } from '../../session/Session.ts'
 import { JsonObject } from '../../storage/schema/Json.ts'
 import type { Definition, NextState, Runtime } from '../../task/Task.ts'
-import { isReplaySafe } from '../Tool.ts'
-import type { Declared } from '../Tool.ts'
+import type { Any } from '../Tool.ts'
 import { CallNotFound } from '../ToolError.ts'
 import * as ToolResult from '../ToolResult.ts'
 import type { Checkpoint, Input, Result as TaskResult } from '../ToolTask.ts'
-import { COMPLETED, execute, runners } from './execute.ts'
-import type { Ending, Ran, Runner } from './execute.ts'
+import { COMPLETED, execute, install } from './execute.ts'
+import type { Ending, Installed, Ran } from './execute.ts'
 
 type ToolRuntime = Runtime<Input, Checkpoint, TaskResult>
 
@@ -86,37 +85,37 @@ const run = (
   runtime: ToolRuntime,
   input: Input,
   call: ToolCall,
-  runner: Runner,
+  installed: Installed,
   args: JsonObject,
 ) =>
-  Effect.flatMap(execute(call, runner, args), (ran) =>
+  Effect.flatMap(execute(call, installed, args), (ran) =>
     runtime.commit((tx) => settleIn(tx, runtime, call, ran)),
   )
 
-const encodeArguments = (tool: Declared, params: unknown) =>
-  Effect.map(Effect.exit(Schema.encodeUnknownEffect(tool.parametersSchema)(params)), (exit) =>
+const encodeArguments = (tool: Any, params: unknown) =>
+  Effect.map(Effect.exit(Schema.encodeUnknownEffect(tool.parameters)(params)), (exit) =>
     Exit.isSuccess(exit) ? Schema.decodeUnknownOption(JsonObject)(exit.value) : Option.none(),
   )
 
 /** Why the call cannot run, or the arguments it runs with, encoded for the checkpoint. */
-const prepare = (call: ToolCall, runner: Runner | undefined) =>
+const prepare = (call: ToolCall, installed: Installed | undefined) =>
   Effect.gen(function* () {
-    if (runner === undefined)
+    if (installed === undefined)
       return ToolResult.failure('tool_unavailable', `Tool ${call.name} is not available`)
     const decoded = yield* Effect.result(
-      Schema.decodeEffect(runner.tool.parametersSchema)(call.arguments),
+      Schema.decodeEffect(installed.tool.parameters)(call.arguments),
     )
     if (Result.isFailure(decoded)) {
       const message = `Invalid arguments for ${call.name}: ${decoded.failure.message}`
       return ToolResult.failure('invalid_arguments', message)
     }
-    const args = yield* encodeArguments(runner.tool, decoded.success)
+    const args = yield* encodeArguments(installed.tool, decoded.success)
     if (Option.isNone(args))
       return ToolResult.failure(
         'invalid_arguments',
         `Arguments of ${call.name} are not a JSON object`,
       )
-    return { args: args.value, runner }
+    return { args: args.value, installed }
   })
 
 /**
@@ -124,10 +123,11 @@ const prepare = (call: ToolCall, runner: Runner | undefined) =>
  * call cannot run, then run the handler.
  */
 const callPhase =
-  (tools: ReadonlyMap<string, Runner>) => (task: { readonly input: Input }, runtime: ToolRuntime) =>
+  (tools: ReadonlyMap<string, Installed>) =>
+  (task: { readonly input: Input }, runtime: ToolRuntime) =>
     Effect.gen(function* () {
       let intent:
-        | { readonly call: ToolCall; readonly runner: Runner; readonly args: JsonObject }
+        | { readonly call: ToolCall; readonly installed: Installed; readonly args: JsonObject }
         | undefined
       yield* runtime.commit((tx) =>
         Effect.gen(function* () {
@@ -135,10 +135,8 @@ const callPhase =
           const prepared = yield* prepare(call, tools.get(call.name))
           if (!('args' in prepared))
             return yield* settleIn(tx, runtime, call, { result: prepared, ending: COMPLETED })
-          intent = { call, runner: prepared.runner, args: prepared.args }
-          const replay = isReplaySafe(prepared.runner.tool)
-            ? ('safe' as const)
-            : ('unsafe' as const)
+          intent = { call, installed: prepared.installed, args: prepared.args }
+          const { replay } = prepared.installed.tool
           return {
             status: 'running' as const,
             checkpoint: { phase: 'execute' as const, arguments: prepared.args, replay },
@@ -146,12 +144,12 @@ const callPhase =
         }),
       )
       if (intent !== undefined)
-        yield* run(runtime, task.input, intent.call, intent.runner, intent.args)
+        yield* run(runtime, task.input, intent.call, intent.installed, intent.args)
     })
 
 /** The `execute` phase, reached only by recovery: rerun only when both policies say `safe`. */
 const executePhase =
-  (tools: ReadonlyMap<string, Runner>) =>
+  (tools: ReadonlyMap<string, Installed>) =>
   (
     task: {
       readonly input: Input
@@ -162,9 +160,9 @@ const executePhase =
     Effect.gen(function* () {
       const { arguments: args, replay } = task.state.checkpoint
       const call = yield* currentCall(runtime, task.input)
-      const runner = tools.get(call.name)
-      if (replay === 'safe' && runner !== undefined && isReplaySafe(runner.tool))
-        return yield* run(runtime, task.input, call, runner, args)
+      const installed = tools.get(call.name)
+      if (replay === 'safe' && installed?.tool.replay === 'safe')
+        return yield* run(runtime, task.input, call, installed, args)
       const message = `Tool ${call.name} was interrupted and may have partially run`
       // `failed` records cancellation intent for what the call owns, now left unsupervised.
       return yield* settle(runtime, task.input, () => ({
@@ -185,10 +183,11 @@ const abortCode = (
 }
 
 export const definition = <Services>(
-  tools: ReadonlyArray<Declared>,
-  handlers: Context.Context<Services>,
+  tools: ReadonlyArray<Any>,
+  implementations: Context.Context<Services>,
+  config: Readonly<Record<string, unknown>>,
 ): Definition<Input, Checkpoint, TaskResult> => {
-  const byName = runners(tools, handlers)
+  const byName = install(tools, implementations, config)
   return {
     name: NAME,
     version: 1,

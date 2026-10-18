@@ -1,37 +1,23 @@
 /**
- * Tool declarations. A declaration is an effect/ai `Tool` made with `Tool.make`: its name,
- * description, and the Schemas of its parameters, success and failure. It imports nothing that
- * runs, so the client and the loop can both import it. The implementation is a
- * `Toolkit.toLayer()` handler, provided only where the loop runs.
+ * Tool declarations. A declaration names a tool and holds the Schemas of its parameters, success,
+ * failure and config, plus what the tool task needs to know to run it durably: whether a call a
+ * crash interrupted may run again, and how much of its output the model sees. It holds no code, so
+ * the client and the loop can both import it. The implementation is a handler, given to
+ * `Toolkit.toLayer()` where the loop runs.
  *
- * Annotations add what the tool task needs to know: whether a call interrupted by a crash may run
- * again (effect/ai's `Tool.Idempotent`) and how much of its output the model sees
- * (`OutputLimits`).
+ * Config is the tool's own settings, such as a timeout or a working directory, set by whoever
+ * installs the tool rather than by the model. Its Schema decodes the value the task is given, so a
+ * config with defaults can be left out.
  */
-import { Context, Option, Schema } from 'effect'
-import { Tool } from 'effect/ai'
-import { JsonObject } from '../storage/schema/Json.ts'
+import { Option, Schema } from 'effect'
 import type { ImageContent, TextContent, ToolDefinition } from '../model/Message.ts'
-
-type Codec = Schema.ConstraintCodec<unknown>
+import { JsonObject } from '../storage/schema/Json.ts'
 
 /**
- * A tool the tool task can run: its Schemas need no services to decode or encode, so a call's
- * arguments and result cross storage on their own.
+ * A Schema the tool task can use without services: arguments, results and config cross storage
+ * and transports encoded, and decode on their own.
  */
-export type Declared = Tool.Any &
-  Tool.Tool<
-    string,
-    {
-      readonly parameters: Codec
-      readonly success: Codec
-      readonly failure: Codec
-      readonly failureMode: Tool.FailureMode
-    }
-  >
-
-/** What the model sees of a result. */
-export type Content = ReadonlyArray<TextContent | ImageContent>
+export type Codec = Schema.ConstraintCodec<unknown>
 
 /** How much of a result the model sees: whole lines, from the start (`head`) or the end. */
 export interface OutputLimits {
@@ -47,31 +33,91 @@ export const defaultOutputLimits: OutputLimits = {
   retain: 'head',
 }
 
-/** Annotation: the tool's output limits. */
-export const OutputLimits = Context.Reference<OutputLimits>(
-  'effect-harness/tool/Tool/OutputLimits',
-  { defaultValue: () => defaultOutputLimits },
-)
+/** What the model sees of a result. */
+export type Content = ReadonlyArray<TextContent | ImageContent>
 
-/** The tool's output limits. */
-export const outputLimits = (tool: Tool.Any): OutputLimits =>
-  Context.get(tool.annotations, OutputLimits)
+export const TypeId = '~effect-harness/tool/Tool'
+export type TypeId = typeof TypeId
 
-/**
- * Whether a call a crash interrupted after it started may run again: the tool is annotated
- * `Tool.Idempotent`. Otherwise the call ends as interrupted, since it may have partly run.
- */
-export const isReplaySafe = (tool: Tool.Any): boolean =>
-  Context.get(tool.annotations, Tool.Idempotent)
+/** A declared tool. */
+export interface Tool<
+  Name extends string,
+  Params extends Codec,
+  Ok extends Codec,
+  Err extends Codec,
+  Cfg extends Codec,
+> {
+  readonly [TypeId]: TypeId
+  readonly name: Name
+  /** What the model reads to decide when to call the tool. */
+  readonly description: string
+  readonly parameters: Params
+  readonly success: Ok
+  /** What the handler fails with; the model sees it as an error result. */
+  readonly failure: Err
+  readonly config: Cfg
+  /**
+   * `safe`: a call a crash interrupted after it started runs again on recovery. `unsafe`, the
+   * default: it ends as interrupted, since it may have partly run.
+   */
+  readonly replay: 'safe' | 'unsafe'
+  readonly outputLimits: OutputLimits
+}
 
-const parametersOf = Schema.decodeUnknownOption(JsonObject)
+/** Any declared tool, with its types erased. */
+export interface Any extends Tool<string, Codec, Codec, Codec, Codec> {}
+
+export type Parameters<T extends Any> = T['parameters']['Type']
+export type Success<T extends Any> = T['success']['Type']
+export type Failure<T extends Any> = T['failure']['Type']
+export type Config<T extends Any> = T['config']['Type']
+
+const NoConfig = Schema.Struct({})
+
+interface Options<Params, Ok, Err, Cfg> {
+  readonly description: string
+  readonly parameters: Params
+  readonly success?: Ok
+  readonly failure?: Err
+  readonly config?: Cfg
+  readonly replay?: 'safe' | 'unsafe'
+  readonly outputLimits?: Partial<OutputLimits>
+}
+
+/** Declare a tool. Without `success` it returns nothing, without `failure` it never fails. */
+export function make<
+  const Name extends string,
+  Params extends Codec,
+  Ok extends Codec = typeof Schema.Void,
+  Err extends Codec = typeof Schema.Never,
+  Cfg extends Codec = typeof NoConfig,
+>(name: Name, options: Options<Params, Ok, Err, Cfg>): Tool<Name, Params, Ok, Err, Cfg>
+export function make(name: string, options: Options<Codec, Codec, Codec, Codec>): Any {
+  return {
+    [TypeId]: TypeId,
+    name,
+    description: options.description,
+    parameters: options.parameters,
+    success: options.success ?? Schema.Void,
+    failure: options.failure ?? Schema.Never,
+    config: options.config ?? NoConfig,
+    replay: options.replay ?? 'unsafe',
+    outputLimits: { ...defaultOutputLimits, ...options.outputLimits },
+  }
+}
+
+const jsonObject = Schema.decodeUnknownOption(JsonObject)
 
 /** The tool as the transcript offers it to the model, with its parameters as JSON Schema. */
-export const definition = (tool: Tool.Any): ToolDefinition => {
-  const parameters = parametersOf(Tool.getJsonSchema(tool))
+export const definition = (tool: Any): ToolDefinition => {
+  const document = Schema.toJsonSchemaDocument(tool.parameters)
+  const schema =
+    Object.keys(document.definitions).length === 0
+      ? document.schema
+      : { ...document.schema, $defs: document.definitions }
   return {
-    name: String(tool.name),
-    description: tool.description ?? '',
-    parameters: Option.getOrElse(parameters, () => ({ type: 'object' })),
+    name: tool.name,
+    description: tool.description,
+    parameters: Option.getOrElse(jsonObject(schema), () => ({ type: 'object' })),
   }
 }

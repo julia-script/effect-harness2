@@ -4,34 +4,41 @@
  */
 import { Deferred, Effect, Exit, Layer, Schema } from 'effect'
 import type { Scope } from 'effect'
-import { Tool as AiTool, Toolkit } from 'effect/ai'
 import { Faux } from '../../model/index.ts'
 import type { Session } from '../../session/index.ts'
 import type { Ids, Task } from '../../storage/schema/index.ts'
-import { Tool, ToolResult, ToolTask } from '../index.ts'
+import { Tool, Toolkit, ToolResult, ToolTask } from '../index.ts'
 
-export const Read = AiTool.make('read', {
+export const Read = Tool.make('read', {
   description: 'Read a file',
   parameters: Schema.Struct({ path: Schema.String }),
   success: Schema.String,
   failure: Schema.Struct({ reason: Schema.String }),
-  failureMode: 'return',
+  config: Schema.Struct({ root: Schema.optionalKey(Schema.String) }),
 })
 
 /** Prints `lines` numbered lines; the model sees the last three, at most 40 bytes. */
-export const Lines = AiTool.make('lines', {
+export const Lines = Tool.make('lines', {
+  description: 'Print lines',
   parameters: Schema.Struct({ lines: Schema.Finite }),
   success: Schema.String,
-}).annotate(Tool.OutputLimits, { maxBytes: 40, maxLines: 3, retain: 'tail' })
+  outputLimits: { maxBytes: 40, maxLines: 3, retain: 'tail' },
+})
 
 /** Waits until released; not replay-safe. */
-export const Slow = AiTool.make('slow', { success: Schema.String })
+export const Slow = Tool.make('slow', {
+  description: 'Wait',
+  parameters: Schema.Struct({}),
+  success: Schema.String,
+})
 
 /** Waits until released; replay-safe. */
-export const SlowSafe = AiTool.make('slow_safe', { success: Schema.String }).annotate(
-  AiTool.Idempotent,
-  true,
-)
+export const SlowSafe = Tool.make('slow_safe', {
+  description: 'Wait',
+  parameters: Schema.Struct({}),
+  success: Schema.String,
+  replay: 'safe',
+})
 
 export const toolkit = Toolkit.make(Read, Lines, Slow, SlowSafe)
 
@@ -55,14 +62,17 @@ const slow = (name: string, { started, release, runs }: Script) =>
   })
 
 /** The tool task over `toolkit` with scripted handlers. */
-export const tasks = (current: Script): Effect.Effect<ToolTask.ToolTask, never, Scope.Scope> =>
+export const tasks = (
+  current: Script,
+  options: ToolTask.Options<typeof toolkit.tools> = {},
+): Effect.Effect<ToolTask.ToolTask, never, Scope.Scope> =>
   Effect.map(
     Layer.build(
       toolkit.toLayer({
-        read: ({ path }) => {
+        read: ({ path }, { config }) => {
           if (path === 'missing') return Effect.fail({ reason: `${path} not found` })
           if (path === 'boom') return Effect.die(new Error('disk on fire'))
-          return Effect.succeed(`contents of ${path}`)
+          return Effect.succeed(`contents of ${config.root ?? ''}${path}`)
         },
         lines: ({ lines }) =>
           Effect.succeed(
@@ -72,7 +82,7 @@ export const tasks = (current: Script): Effect.Effect<ToolTask.ToolTask, never, 
         slow_safe: () => slow('slow_safe', current),
       }),
     ),
-    (handlers) => ToolTask.make(toolkit, handlers),
+    (implementations) => ToolTask.make(toolkit, implementations, options),
   )
 
 /** Commit an assistant entry calling `name` with `args`, and the tool task for the call. */

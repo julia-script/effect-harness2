@@ -327,6 +327,16 @@ Model.layer([
 ]) // settings: { model: OpenAiCodex.ref('gpt-5.5', 'codex-work') }
 ```
 
+A stock provider also lists what its account reaches, over the same credentials: each model with
+the thinking levels it takes and, for Codex, its default level and service tiers. `served` says
+whether the provider routes requests to it.
+
+```ts
+const codex = OpenAiCodex.provider({ name: 'codex-work' })
+const listed = yield * codex.listModels // needs HttpClient and Credentials, like the provider
+// [{ id: 'gpt-5.5', thinkingLevels: ['low', 'medium', 'xhigh'], serviceTiers: [...], served: true }, ...]
+```
+
 Anthropic subscriptions (Claude Pro/Max) are not supported: pi uses them by identifying as Claude
 Code, which this harness does not do. Use an Anthropic API key.
 

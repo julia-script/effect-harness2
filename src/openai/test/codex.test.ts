@@ -45,7 +45,43 @@ const respond = (request: Recorded) => {
       json: { access_token: jwt('acct_new'), refresh_token: 'refresh_new', expires_in: 3600 },
     }
   }
+  if (request.path === '/codex/models') return { json: codexModels }
   return events
+}
+
+/** A model list as Codex's backend sends it, trimmed to a few fields and models. */
+const codexModels = {
+  models: [
+    {
+      slug: 'gpt-new',
+      display_name: 'GPT New',
+      description: 'Not in the catalog yet.',
+      default_reasoning_level: 'none',
+      supported_reasoning_levels: [
+        { effort: 'none', description: 'No reasoning' },
+        { effort: 'ultra', description: 'A level the harness has no name for' },
+      ],
+      visibility: 'list',
+      priority: 2,
+      context_window: 400_000,
+      shell_type: 'shell_command',
+    },
+    { slug: 'gpt-hidden', display_name: 'Hidden', visibility: 'hide', priority: 0 },
+    {
+      slug: 'gpt-5.5',
+      display_name: 'GPT-5.5',
+      description: null,
+      default_reasoning_level: 'medium',
+      supported_reasoning_levels: [
+        { effort: 'low', description: 'Fast' },
+        { effort: 'medium', description: 'Balanced' },
+        { effort: 'xhigh', description: 'Deepest' },
+      ],
+      visibility: 'list',
+      priority: 1,
+      service_tiers: [{ id: 'priority', name: 'Fast', description: 'Faster, at more usage' }],
+    },
+  ],
 }
 
 const user = (text: string): Message.Message => ({ role: 'user', content: text, timestamp: 0 })
@@ -196,6 +232,49 @@ describe('OpenAiCodex', () => {
       'acct_new',
     ])
   }, 10_000)
+
+  test('listModels lists the account models with their efforts and tiers', async () => {
+    const { value, requests } = await run((url) =>
+      Effect.gen(function* () {
+        const store = yield* Credentials.Credentials
+        yield* store.set('codex-work', stored(Date.now() + 3_600_000))
+        const codex = OpenAiCodex.provider({ name: 'codex-work', baseUrl: url, authUrl: url })
+        return yield* codex.listModels
+      }),
+    )
+    expect(requests[0]).toMatchObject({
+      path: '/codex/models',
+      search: '?client_version=0.163.0',
+      headers: {
+        authorization: `Bearer ${jwt('acct_1')}`,
+        'chatgpt-account-id': 'acct_1',
+        originator: 'effect-harness',
+      },
+    })
+    expect(value).toEqual([
+      {
+        provider: 'codex-work',
+        id: 'gpt-5.5',
+        name: 'GPT-5.5',
+        served: true,
+        thinkingLevels: ['low', 'medium', 'xhigh'],
+        defaultThinkingLevel: 'medium',
+        serviceTiers: [{ id: 'priority', name: 'Fast', description: 'Faster, at more usage' }],
+        contextWindow: 272_000,
+      },
+      {
+        provider: 'codex-work',
+        id: 'gpt-new',
+        name: 'GPT New',
+        description: 'Not in the catalog yet.',
+        served: false,
+        thinkingLevels: ['off'],
+        defaultThinkingLevel: 'off',
+        serviceTiers: [],
+        contextWindow: 400_000,
+      },
+    ])
+  })
 
   test('without stored tokens, a request fails asking to sign in', async () => {
     const { value } = await run((url) => Effect.flip(ask(url, 'gpt-5.5')))

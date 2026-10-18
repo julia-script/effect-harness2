@@ -1,12 +1,12 @@
 /**
  * OpenAI, as a `Model` provider over the Responses API. `provider` is a plain value: give it to
  * `Model.layer`, which then needs an `HttpClient`, and `Credentials` unless the provider was given
- * an API key.
+ * an API key. Its `listModels` lists what the key reaches, over the same key.
  */
 import type { HttpClient } from 'effect/http'
 import type { Redacted } from 'effect'
 import type { Credentials } from '../credentials/Credentials.ts'
-import type { Definition, Provider, Ref } from '../model/Model.ts'
+import type { Definition, Listable, Ref } from '../model/Model.ts'
 import { models as catalog } from './internal/catalog.ts'
 import * as internal from './internal/provider.ts'
 
@@ -36,10 +36,10 @@ export interface Options {
 /** The OpenAI provider, with a fixed API key. */
 export function provider(
   options: Options & { readonly apiKey: Redacted.Redacted },
-): Provider<HttpClient.HttpClient>
+): Listable<HttpClient.HttpClient>
 /** The OpenAI provider, reading its API key from `Credentials` for each request. */
-export function provider(options?: Options): Provider<HttpClient.HttpClient | Credentials>
-export function provider(options: Options = {}): Provider<HttpClient.HttpClient | Credentials> {
+export function provider(options?: Options): Listable<HttpClient.HttpClient | Credentials>
+export function provider(options: Options = {}): Listable<HttpClient.HttpClient | Credentials> {
   return internal.make(options)
 }
 

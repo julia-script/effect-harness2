@@ -8,13 +8,14 @@ import { Effect, Redacted, Semaphore } from 'effect'
 import { HttpClient, HttpClientRequest } from 'effect/http'
 import * as Credentials from '../../../credentials/Credentials.ts'
 import * as LanguageModelProvider from '../../../model/LanguageModelProvider.ts'
-import type { Info, Request } from '../../../model/Model.ts'
+import type { Info, Listable, Request } from '../../../model/Model.ts'
 import { ModelError, Rejected } from '../../../model/ModelError.ts'
 import * as Transcript from '../../../model/Transcript.ts'
 import type { Options } from '../../OpenAiCodex.ts'
 import { config as responsesConfig } from '../provider.ts'
 import { AUTH_URL, accountId, refresh } from './auth.ts'
 import { models as catalog } from './catalog.ts'
+import { list } from './models.ts'
 
 const BASE_URL = 'https://chatgpt.com/backend-api'
 
@@ -34,45 +35,52 @@ const config = (model: Info, request: Request) => {
   }
 }
 
-export const make = (options: Options) => {
-  const name = options.name ?? 'openai-codex'
-  // One refresh at a time for this provider, so concurrent requests near expiry refresh once.
-  const line = Semaphore.makeUnsafe(1)
-  const authUrl = options.authUrl ?? AUTH_URL
-  const tokens = (http: HttpClient.HttpClient) =>
-    Credentials.makeResolver({
+/** The fresh access token of the account stored under `name`, and the account id it carries. */
+const account = (name: string, authUrl: string, line: Semaphore.Semaphore) =>
+  Effect.gen(function* () {
+    const http = yield* HttpClient.HttpClient
+    const resolve = yield* Credentials.makeResolver({
       refresh: (_provider, stored) =>
         Effect.provideService(refresh(authUrl, stored), HttpClient.HttpClient, http),
-    }).pipe(
-      Effect.flatMap((resolve) => resolve(name)),
+    })
+    const credential = yield* resolve(name).pipe(
       Semaphore.withPermit(line),
       Effect.mapError((cause) => rejected(`Codex credentials: ${cause.message}`, cause)),
-      Effect.flatMap((credential) =>
-        credential?.type === 'oauth'
-          ? Effect.succeed(Redacted.value(credential.access))
-          : Effect.fail(rejected(`Sign in to Codex first: no ${name} tokens are stored`)),
-      ),
     )
-  return LanguageModelProvider.make({
+    if (credential?.type !== 'oauth') {
+      return yield* rejected(`Sign in to Codex first: no ${name} tokens are stored`)
+    }
+    const access = Redacted.value(credential.access)
+    const id = accountId(access)
+    if (id === undefined) return yield* rejected('The Codex token has no account id')
+    return { access, id }
+  })
+
+export const make = (
+  options: Options,
+): Listable<HttpClient.HttpClient | Credentials.Credentials> => {
+  const name = options.name ?? 'openai-codex'
+  const baseUrl = options.baseUrl ?? BASE_URL
+  const originator = options.originator ?? 'effect-harness'
+  // One refresh at a time for this provider, so concurrent requests near expiry refresh once.
+  const tokens = account(name, options.authUrl ?? AUTH_URL, Semaphore.makeUnsafe(1))
+  const provider = LanguageModelProvider.make({
     name,
     api: 'openai-codex-responses',
     models: options.models ?? catalog,
     system: 'separate',
     languageModel: (model, request) =>
       Effect.gen(function* () {
-        const http = yield* HttpClient.HttpClient
-        const access = yield* tokens(http)
-        const account = accountId(access)
-        if (account === undefined) return yield* rejected('The Codex token has no account id')
+        const { access, id } = yield* tokens
         const sessionId = request.options?.sessionId
         const client = yield* OpenAiClient.make({
           apiKey: Redacted.make(access),
-          apiUrl: `${options.baseUrl ?? BASE_URL}/codex`,
+          apiUrl: `${baseUrl}/codex`,
           transformClient: HttpClient.mapRequest(
             HttpClientRequest.setHeaders({
-              'chatgpt-account-id': account,
+              'chatgpt-account-id': id,
               'OpenAI-Beta': 'responses=experimental',
-              originator: options.originator ?? 'effect-harness',
+              originator,
               ...(sessionId === undefined ? {} : { 'session-id': sessionId }),
             }),
           ),
@@ -83,4 +91,8 @@ export const make = (options: Options) => {
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, client))
       }),
   })
+  const listModels = Effect.flatMap(tokens, (found) =>
+    list({ baseUrl, originator, name, served: provider.models, ...found, ...options }),
+  )
+  return { ...provider, listModels }
 }

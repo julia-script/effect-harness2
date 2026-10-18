@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines-per-function -- describe blocks */
 /**
  * The Anthropic provider against a local stand-in for the Messages API: the request it sends for
  * the catalog model and options, and the response it maps back.
@@ -118,5 +119,53 @@ describe('Anthropic.provider', () => {
     const requests = await run((url) => ask(url, 'claude-opus-4-5', { temperature: 0.5 }))
     expect(requests[0]?.body).toMatchObject({ temperature: 0.5 })
     expect(requests[0]?.body).not.toHaveProperty('thinking')
+  })
+
+  test('listModels follows the pages and names the catalog levels', async () => {
+    const requests = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const api = yield* serve((request) => ({
+            json: request.search.includes('after_id')
+              ? {
+                  data: [{ type: 'model', id: 'claude-new', display_name: 'Claude New' }],
+                  has_more: false,
+                  first_id: 'claude-new',
+                  last_id: 'claude-new',
+                }
+              : {
+                  data: [
+                    { type: 'model', id: 'claude-sonnet-5-5', display_name: 'Claude Sonnet 5.5' },
+                  ],
+                  has_more: true,
+                  first_id: 'claude-sonnet-5-5',
+                  last_id: 'claude-sonnet-5-5',
+                },
+          }))
+          const provider = Anthropic.provider({ apiKey: Redacted.make('sk-ant'), apiUrl: api.url })
+          const listed = yield* provider.listModels
+          expect(
+            listed.map(({ id, served, thinkingLevels }) => ({ id, served, thinkingLevels })),
+          ).toEqual([
+            {
+              id: 'claude-sonnet-5-5',
+              served: true,
+              thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+            },
+            { id: 'claude-new', served: false, thinkingLevels: undefined },
+          ])
+          return api.requests
+        }),
+        // oxlint-disable-next-line effecttsgo/strict-effect-provide -- each test is an entry point
+      ).pipe(Effect.provide(FetchHttpClient.layer)),
+    )
+    expect(requests.map(({ path, search }) => `${path}${search}`)).toEqual([
+      '/v1/models?limit=1000',
+      '/v1/models?limit=1000&after_id=claude-sonnet-5-5',
+    ])
+    expect(requests[0]?.headers).toMatchObject({
+      'x-api-key': 'sk-ant',
+      'anthropic-version': '2023-06-01',
+    })
   })
 })

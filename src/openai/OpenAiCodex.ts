@@ -9,7 +9,7 @@ import type { Effect } from 'effect'
 import type { HttpClient } from 'effect/http'
 import type { Credentials } from '../credentials/Credentials.ts'
 import type { CredentialsError, ReadOnly } from '../credentials/CredentialsError.ts'
-import type { Definition, Provider, Ref } from '../model/Model.ts'
+import type { Definition, Listable, Ref } from '../model/Model.ts'
 import { models as catalog } from './internal/codex/catalog.ts'
 import * as auth from './internal/codex/auth.ts'
 import * as internal from './internal/codex/provider.ts'
@@ -49,10 +49,15 @@ export interface Options {
   readonly models?: ReadonlyArray<Definition>
   /** How requests name this client. Default `effect-harness`. */
   readonly originator?: string
+  /** The Codex CLI version `listModels` asks for, which decides what the backend lists. */
+  readonly clientVersion?: string
 }
 
-/** The Codex provider over the tokens `login` stored. */
-export const provider = (options: Options = {}): Provider<HttpClient.HttpClient | Credentials> =>
+/**
+ * The Codex provider over the tokens `login` stored. Its `listModels` lists the account's models
+ * with their efforts and service tiers, over the same tokens.
+ */
+export const provider = (options: Options = {}): Listable<HttpClient.HttpClient | Credentials> =>
   internal.make(options)
 
 export interface LoginOptions {

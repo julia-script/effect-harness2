@@ -13,7 +13,14 @@ import { JsonObject } from '../storage/schema/Json.ts'
 import * as messages from './internal/messages.ts'
 import * as route from './internal/route.ts'
 import type { DeferredHandle } from './Message.ts'
-import { AssistantMessage, Message, ModelRef, ThinkingLevel, ToolCall } from './Message.ts'
+import {
+  AssistantMessage,
+  Message,
+  ModelRef,
+  ModelThinkingLevel,
+  ThinkingLevel,
+  ToolCall,
+} from './Message.ts'
 import type { ModelError } from './ModelError.ts'
 
 /** Which model to ask. */
@@ -142,6 +149,36 @@ export interface Provider<out R = never> {
   ) => Effect.Effect<AssistantMessage, ModelError, R>
   /** Cancel a deferred response, best effort. */
   readonly cancel?: (handle: DeferredHandle, model: Info) => Effect.Effect<void, ModelError, R>
+}
+
+/** A speed or priority tier a model can be served at, as Codex lists them. */
+export const ServiceTier = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  description: Schema.String,
+})
+export type ServiceTier = typeof ServiceTier.Type
+
+/** A model as its provider lists it now, for a model picker. */
+export const Listed = Schema.Struct({
+  provider: Schema.String,
+  id: Schema.String,
+  name: Schema.String,
+  description: Schema.optionalKey(Schema.String),
+  /** Whether requests to it route through this provider; one it does not serve needs `models`. */
+  served: Schema.Boolean,
+  /** The levels `reasoning` takes for it, where known. */
+  thinkingLevels: Schema.optionalKey(Schema.Array(ModelThinkingLevel)),
+  defaultThinkingLevel: Schema.optionalKey(ModelThinkingLevel),
+  serviceTiers: Schema.Array(ServiceTier),
+  contextWindow: Schema.optionalKey(Schema.Finite),
+})
+export type Listed = typeof Listed.Type
+
+/** A stock provider, which can also list the models its account reaches, over its own credentials. */
+export interface Listable<out R = never> extends Provider<R> {
+  /** The models the provider's API lists now. */
+  readonly listModels: Effect.Effect<ReadonlyArray<Listed>, ModelError, R>
 }
 
 export interface Service {

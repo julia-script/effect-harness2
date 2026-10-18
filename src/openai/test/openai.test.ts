@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines-per-function -- describe blocks */
 /**
  * The OpenAI provider against a local stand-in for the Responses API: the request it sends for the
  * catalog model and options, and the response it maps back.
@@ -6,7 +7,7 @@ import { describe, expect, test } from 'bun:test'
 import { Effect, Redacted } from 'effect'
 import { FetchHttpClient } from 'effect/http'
 import { Credentials } from '../../credentials/index.ts'
-import { Model } from '../../model/index.ts'
+import { Model, ModelError } from '../../model/index.ts'
 import type { Message } from '../../model/index.ts'
 import { serve } from '../../model/test/fakeApi.ts'
 import { OpenAi } from '../index.ts'
@@ -71,5 +72,56 @@ describe('OpenAi.provider', () => {
           ])
         }),
       ).pipe(Effect.provide([FetchHttpClient.layer, Credentials.layerMemory()]), Effect.orDie),
+    ))
+
+  test('listModels lists what the stored key reaches, marking what the provider serves', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const api = yield* serve(() => ({
+            json: { object: 'list', data: [{ id: 'gpt-5.5' }, { id: 'gpt-next' }] },
+          }))
+          const store = yield* Credentials.Credentials
+          yield* store.set('openai-team', { type: 'api_key', key: Redacted.make('sk-team') })
+          const provider = OpenAi.provider({ name: 'openai-team', apiUrl: `${api.url}/v1` })
+          const listed = yield* provider.listModels
+          expect(api.requests[0]).toMatchObject({
+            path: '/v1/models',
+            headers: { authorization: 'Bearer sk-team' },
+          })
+          expect(listed).toEqual([
+            {
+              provider: 'openai-team',
+              id: 'gpt-5.5',
+              name: 'GPT-5.5',
+              served: true,
+              thinkingLevels: ['off', 'low', 'medium', 'high', 'xhigh'],
+              serviceTiers: [],
+              contextWindow: 272_000,
+            },
+            {
+              provider: 'openai-team',
+              id: 'gpt-next',
+              name: 'gpt-next',
+              served: false,
+              serviceTiers: [],
+            },
+          ])
+        }),
+      ).pipe(Effect.provide([FetchHttpClient.layer, Credentials.layerMemory()]), Effect.orDie),
+    ))
+
+  test('listModels fails Rejected on a refused key', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const api = yield* serve(() => ({ status: 401, json: { error: { message: 'bad key' } } }))
+          const provider = OpenAi.provider({ apiKey: Redacted.make('sk-bad'), apiUrl: api.url })
+          const error = yield* Effect.flip(provider.listModels)
+          expect(error.reason).toBeInstanceOf(ModelError.Rejected)
+          expect(error.message).toContain('401')
+        }),
+        // oxlint-disable-next-line effecttsgo/strict-effect-provide -- each test is an entry point
+      ).pipe(Effect.provide(FetchHttpClient.layer)),
     ))
 })

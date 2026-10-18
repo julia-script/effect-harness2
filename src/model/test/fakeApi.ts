@@ -8,6 +8,8 @@ import type { Scope } from 'effect'
 
 export interface Recorded {
   readonly path: string
+  /** The query string, with its `?`. */
+  readonly search: string
   readonly headers: Readonly<Record<string, string>>
   readonly body: unknown
 }
@@ -56,6 +58,7 @@ export const serve = (
             request.text().then((text) => {
               const recorded: Recorded = {
                 path: new URL(request.url).pathname,
+                search: new URL(request.url).search,
                 headers: Object.fromEntries(request.headers),
                 body: body(text, request.headers.get('content-type')),
               }

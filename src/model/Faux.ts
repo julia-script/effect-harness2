@@ -8,18 +8,8 @@ import type { NonEmptyReadonlyArray } from 'effect/Array'
 import * as faux from './internal/faux.ts'
 import type { AssistantMessage, DeferredHandle, StopReason } from './Message.ts'
 import { emptyUsage } from './Message.ts'
-import type { Info, Provider, Ref, Request } from './Model.ts'
+import type { Definition, Info, Provider, Ref, Request } from './Model.ts'
 import type { ModelError } from './ModelError.ts'
-
-export interface ModelDefinition {
-  readonly id: string
-  readonly name?: string
-  readonly reasoning?: boolean
-  readonly input?: ReadonlyArray<'text' | 'image'>
-  readonly contextWindow?: number
-  readonly maxTokens?: number
-  readonly cost?: Info['cost']
-}
 
 export interface Options {
   /** Default `faux`. */
@@ -27,7 +17,7 @@ export interface Options {
   /** Default `faux`. */
   readonly api?: string
   /** Default one model, `faux-1`. */
-  readonly models?: ReadonlyArray<ModelDefinition>
+  readonly models?: ReadonlyArray<Definition>
   readonly deferred?: {
     /** Polls that return the handle again before the response is ready. */
     readonly pendingFetches?: number

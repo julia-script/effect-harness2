@@ -16,3 +16,6 @@ export * as ModelError from './ModelError.ts'
 
 /** A scripted provider for tests. */
 export * as Faux from './Faux.ts'
+
+/** A provider over an effect/ai `LanguageModel`. */
+export * as LanguageModelProvider from './LanguageModelProvider.ts'

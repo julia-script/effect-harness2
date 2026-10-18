@@ -4,10 +4,11 @@
 import { Clock, Duration, Effect, Ref, Stream } from 'effect'
 import type { Exit } from 'effect'
 import type { NonEmptyReadonlyArray } from 'effect/Array'
-import type { Faux, ModelDefinition, Options, State, Step } from '../Faux.ts'
+import type { Faux, Options, State, Step } from '../Faux.ts'
 import type { AssistantContent, AssistantMessage, DeferredHandle } from '../Message.ts'
 import { emptyUsage } from '../Message.ts'
-import type { Event, Info, Provider, Request } from '../Model.ts'
+import type { Definition, Event, Info, Provider, Request } from '../Model.ts'
+import { define } from '../Model.ts'
 import { ModelError, Rejected } from '../ModelError.ts'
 import { estimateTokens, withUsage } from './fauxUsage.ts'
 
@@ -42,18 +43,8 @@ const rejected = (message: string, response?: AssistantMessage) =>
   })
 
 const infoOf = (core: Core): NonEmptyReadonlyArray<Info> => {
-  const info = (definition: ModelDefinition): Info => ({
-    provider: core.name,
-    id: definition.id,
-    name: definition.name ?? definition.id,
-    api: core.api,
-    reasoning: definition.reasoning ?? false,
-    input: definition.input ?? ['text', 'image'],
-    contextWindow: definition.contextWindow ?? 128_000,
-    maxTokens: definition.maxTokens ?? 16_384,
-    cost: definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  })
   const [first = { id: 'faux-1', name: 'Faux Model' }, ...rest] = core.options.models ?? []
+  const info = (definition: Definition) => define(core.name, core.api, definition)
   return [info(first), ...rest.map((definition) => info(definition))]
 }
 

@@ -44,6 +44,33 @@ export const Info = Schema.Struct({
 })
 export type Info = typeof Info.Type
 
+/** A model as a provider declares it; `define` fills in the defaults. */
+export interface Definition {
+  readonly id: string
+  readonly name?: string
+  readonly reasoning?: boolean
+  readonly input?: ReadonlyArray<'text' | 'image'>
+  /** Default 128,000 tokens. */
+  readonly contextWindow?: number
+  /** Default 16,384 tokens. */
+  readonly maxTokens?: number
+  /** Default free. */
+  readonly cost?: Cost
+}
+
+/** The `Info` of a model `provider` serves over `api`. */
+export const define = (provider: string, api: string, definition: Definition): Info => ({
+  provider,
+  id: definition.id,
+  name: definition.name ?? definition.id,
+  api,
+  reasoning: definition.reasoning ?? false,
+  input: definition.input ?? ['text', 'image'],
+  contextWindow: definition.contextWindow ?? 128_000,
+  maxTokens: definition.maxTokens ?? 16_384,
+  cost: definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+})
+
 /** Request options every provider understands; one that does not support an option ignores it. */
 export const Options = Schema.Struct({
   /** Stable per conversation, for providers that cache or route by session. */

@@ -3,6 +3,7 @@
  * `ContextOverflow`, retry on `Retryable`, and end the run otherwise.
  */
 import { Schema } from 'effect'
+import * as overflow from './internal/overflow.ts'
 import { AssistantMessage } from './Message.ts'
 
 /** The request does not fit the model's context window; only compacting helps. */
@@ -52,3 +53,9 @@ export class ModelError extends Schema.TaggedError<ModelError, { readonly brand:
     return this.reason instanceof Retryable
   }
 }
+
+/**
+ * Whether a provider's error text reports a context overflow, by the patterns pi-ai matches, so a
+ * provider can fail `ContextOverflow` rather than `Rejected`.
+ */
+export const isOverflowText: (text: string) => boolean = overflow.isOverflowText

@@ -67,7 +67,15 @@ export interface Tool<
    * conversation's agent lists it as deferred.
    */
   readonly deferred: boolean
+  /**
+   * Who may call it: the model, other tools through `Call.execute`, or both, the default. Code
+   * mode is `['model']`; a tool meant only for scripts is `['tools']`.
+   */
+  readonly callers: ReadonlyArray<Caller>
 }
+
+/** Who calls a tool: the model, or another tool's handler. */
+export type Caller = 'model' | 'tools'
 
 /** Any declared tool, with its types erased. */
 export interface Any extends Tool<string, Codec, Codec, Codec, Codec> {}
@@ -88,6 +96,7 @@ interface Options<Params, Ok, Err, Cfg> {
   readonly replay?: 'safe' | 'unsafe'
   readonly outputLimits?: Partial<OutputLimits>
   readonly deferred?: boolean
+  readonly callers?: ReadonlyArray<Caller>
 }
 
 /** Declare a tool. Without `success` it returns nothing, without `failure` it never fails. */
@@ -110,6 +119,7 @@ export function make(name: string, options: Options<Codec, Codec, Codec, Codec>)
     replay: options.replay ?? 'unsafe',
     outputLimits: { ...defaultOutputLimits, ...options.outputLimits },
     deferred: options.deferred ?? false,
+    callers: options.callers ?? ['model', 'tools'],
   }
 }
 

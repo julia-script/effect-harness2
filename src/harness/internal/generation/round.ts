@@ -143,7 +143,7 @@ const addedTools = (runtime: GenerationRuntime, tools: ReadonlyArray<TaskId>) =>
       outcome.status === 'completed'
         ? Option.match(decodeResult(outcome.result), {
             onNone: () => [],
-            onSome: ({ control }) => control?.addTools ?? [],
+            onSome: (result) => ('control' in result ? (result.control?.addTools ?? []) : []),
           })
         : [],
     ),

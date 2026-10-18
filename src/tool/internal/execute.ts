@@ -49,6 +49,8 @@ export interface Ran {
   readonly result: ToolResult.Result
   readonly ending: Ending
   readonly durationMs?: number
+  /** The tool's success or declared failure, encoded: what a nested call returns. */
+  readonly value?: Schema.Json
 }
 
 /** An encoded value as model content: a string as itself, anything else as JSON. */
@@ -58,6 +60,7 @@ const contentOf = (encoded: unknown): Content => {
 }
 
 const isOutput = Schema.is(ToolResult.Output)
+const isJson = Schema.is(Schema.Json)
 
 /** An encoded success or failure as the result the model sees, within the tool's limits. */
 const resultOf = (tool: Any, encoded: unknown, isError: boolean): ToolResult.Result => {
@@ -100,7 +103,10 @@ export const rebound = (tool: Any, result: ToolResult.Result): ToolResult.Result
 const ranOf = (call: ToolCall, tool: Any, outcome: Outcome): Omit<Ran, 'durationMs'> => {
   if (outcome.type === 'success' || outcome.type === 'failure') {
     const isError = outcome.type === 'failure'
-    return { result: resultOf(tool, outcome.value, isError), ending: COMPLETED }
+    const result = resultOf(tool, outcome.value, isError)
+    return isJson(outcome.value)
+      ? { result, ending: COMPLETED, value: outcome.value }
+      : { result, ending: COMPLETED }
   }
   if (outcome.type === 'invalidArguments') {
     const message = `Invalid arguments for ${call.name}: ${outcome.message}`

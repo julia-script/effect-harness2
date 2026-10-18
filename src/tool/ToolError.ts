@@ -13,3 +13,14 @@ export class CallNotFound extends Schema.TaggedError<
   assistant: EntryId,
   callId: Schema.String,
 }) {}
+
+/**
+ * A nested call that cannot be made: outside a tool call, after the calling tool settled, or under
+ * a key the caller already used for another tool or other arguments.
+ */
+export class NestedCallRefused extends Schema.TaggedError<
+  NestedCallRefused,
+  { readonly brand: unique symbol }
+>('effect-harness/tool/ToolError/NestedCallRefused')('NestedCallRefused', {
+  message: Schema.String,
+}) {}

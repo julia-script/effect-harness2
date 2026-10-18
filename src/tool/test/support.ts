@@ -114,7 +114,7 @@ export const answer = (session: Session.Service, outcome: Task.TaskOutcome) =>
   Effect.orDie(
     Effect.gen(function* () {
       const result = 'result' in outcome ? outcome.result : undefined
-      const { entryId } = yield* Schema.decodeUnknownEffect(ToolTask.Result)(result)
+      const { entryId } = yield* Schema.decodeUnknownEffect(ToolTask.ModelResult)(result)
       const entry = yield* session.commit((tx) => tx.entry(entryId))
       const data = yield* Schema.decodeUnknownEffect(ToolResult.Data)(entry?.data)
       return { entry, message: entry?.model?.[0], diagnostics: data.diagnostics }

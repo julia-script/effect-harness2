@@ -32,7 +32,10 @@
         "src/client/**",
         "src/harness/HarnessServer.ts",
         "src/harness/internal/server.ts",
-        "src/credentials/**"
+        "src/credentials/**",
+        "src/model/LanguageModelProvider.ts",
+        "src/model/internal/languageModel/**",
+        "src/model/test/languageModel.test.ts"
       ],
       "rules": {
         "effecttsgo/unstable-api-usage": "off"

@@ -15,7 +15,6 @@
 import { Context, Effect, Layer } from 'effect'
 import type { Duration, Scope } from 'effect'
 import * as Rpcs from '../client/HarnessRpcs.ts'
-import { Session } from '../session/Session.ts'
 import type { Service as SessionService, Tx } from '../session/Session.ts'
 import type { CommitError, SessionFailed, TxDocumentError } from '../session/SessionError.ts'
 import type { ConversationRecord } from '../storage/schema/Conversation.ts'
@@ -23,10 +22,16 @@ import type { ConversationId, SubmissionId } from '../storage/schema/Ids.ts'
 import type { Storage } from '../storage/Storage.ts'
 import type { StorageError } from '../storage/StorageError.ts'
 import type { Registry } from '../task/Registry.ts'
-import { Scheduler } from '../task/Scheduler.ts'
 import type { Service as SchedulerService } from '../task/Scheduler.ts'
 import type { Conversation, CreateOptions, Init } from './Conversation.ts'
-import type { Extensions } from './Extensions.ts'
+import type { Model } from '../model/Model.ts'
+import type * as Task from '../task/Task.ts'
+import type * as Toolkit from '../tool/Toolkit.ts'
+import type { Extension } from './Extension.ts'
+import { Extensions } from './Extensions.ts'
+import type { InvalidExtension } from './HarnessError.ts'
+import * as defaults from './internal/layer.ts'
+import type * as Settings from './Settings.ts'
 import * as internal from './internal/harness.ts'
 import type { AbortResult, Submission } from './Submission.ts'
 import type { TaskGraph, Watch } from './ViewState.ts'
@@ -100,22 +105,43 @@ export const make: Effect.Effect<
   Storage | Registry | Extensions | Scope.Scope
 > = makeWith({})
 
-/** A `Harness`, with its `Session` and `Scheduler`, over the provided Storage and Registry. */
-export const layerWith = (
-  options: Options,
-): Layer.Layer<Harness | Session | Scheduler, CommitError, Storage | Registry | Extensions> =>
-  Layer.effectContext(
-    Effect.map(makeWith(options), (harness) =>
-      Context.make(Harness, harness).pipe(
-        Context.add(Session, harness.session),
-        Context.add(Scheduler, harness.scheduler),
-      ),
+/** What the default loop takes besides the Harness options. */
+export interface LayerOptions<
+  Installs extends ReadonlyArray<Extension> = ReadonlyArray<Extension>,
+> extends Options {
+  /** Installed in order before the loop opens, with their tools' implementations from context. */
+  readonly extensions?: Installs
+  /** Provides `Settings.Current` to the loop; otherwise the one in context applies. */
+  readonly settings?: Settings.Input | Effect.Effect<Settings.Input>
+  /** Installed after the built-in tasks, replacing any of the same name. */
+  readonly tasks?: Iterable<Task.Any>
+}
+
+/** The tool implementations installing `X` needs. */
+export type Requires<X> = X extends Extension<infer Names> ? Toolkit.Requires<Names> : never
+
+/**
+ * The default loop over the `Storage` and `Model` in context: its own task `Registry` and
+ * `Extensions`, the given extensions, the built-in generation, tool and compaction tasks, and a
+ * `Harness` over them. It provides the Harness and the Extensions, to install more at run time.
+ */
+export function layer<const Installs extends ReadonlyArray<Extension> = readonly []>(
+  options?: LayerOptions<Installs>,
+): Layer.Layer<
+  Harness | Extensions,
+  CommitError | InvalidExtension,
+  Storage | Model | Requires<Installs[number]>
+>
+export function layer(
+  options: LayerOptions = {},
+): Layer.Layer<
+  Harness | Extensions,
+  CommitError | InvalidExtension,
+  Storage | Model | Toolkit.Requires<string>
+> {
+  return Layer.effectContext(
+    Effect.map(defaults.open(options), ({ harness, extensions }) =>
+      Context.make(Harness, harness).pipe(Context.add(Extensions, extensions)),
     ),
   )
-
-/** `layerWith` with the default options. */
-export const layer: Layer.Layer<
-  Harness | Session | Scheduler,
-  CommitError,
-  Storage | Registry | Extensions
-> = layerWith({})
+}

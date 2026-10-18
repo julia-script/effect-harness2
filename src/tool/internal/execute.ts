@@ -1,7 +1,7 @@
 /**
  * Running one call, and turning what it comes to into the result the model sees.
  */
-import { Clock, Context, Effect, Option } from 'effect'
+import { Clock, Context, Effect, Option, Schema } from 'effect'
 import type { ToolCall } from '../../model/Message.ts'
 import type { JsonObject } from '../../storage/schema/Json.ts'
 import type { Any, Content } from '../Tool.ts'
@@ -57,6 +57,20 @@ const contentOf = (encoded: unknown): Content => {
   return text === '' ? [] : [{ type: 'text', text }]
 }
 
+const isOutput = Schema.is(ToolResult.Output)
+
+/** An encoded success or failure as the result the model sees, within the tool's limits. */
+const resultOf = (tool: Any, encoded: unknown, isError: boolean): ToolResult.Result => {
+  if (!isOutput(encoded)) return bounded(tool, contentOf(encoded), isError)
+  const { content, diagnostics = [], details } = encoded
+  return rebound(tool, {
+    output: content,
+    isError,
+    diagnostics,
+    ...(details === undefined ? {} : { details }),
+  })
+}
+
 /** `output` within the tool's limits, with a `truncated` warning when they dropped text. */
 const bounded = (tool: Any, output: Content, isError: boolean): ToolResult.Result => {
   const limits = tool.outputLimits
@@ -85,7 +99,7 @@ export const rebound = (tool: Any, result: ToolResult.Result): ToolResult.Result
 const ranOf = (call: ToolCall, tool: Any, outcome: Outcome): Omit<Ran, 'durationMs'> => {
   if (outcome.type === 'success' || outcome.type === 'failure') {
     const isError = outcome.type === 'failure'
-    return { result: bounded(tool, contentOf(outcome.value), isError), ending: COMPLETED }
+    return { result: resultOf(tool, outcome.value, isError), ending: COMPLETED }
   }
   if (outcome.type === 'invalidArguments') {
     const message = `Invalid arguments for ${call.name}: ${outcome.message}`

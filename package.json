@@ -49,6 +49,10 @@
     "./tool": {
       "types": "./dist/tool/index.d.ts",
       "default": "./dist/tool/index.js"
+    },
+    "./coding": {
+      "types": "./dist/coding/index.d.ts",
+      "default": "./dist/coding/index.js"
     }
   },
   "scripts": {
@@ -63,6 +67,7 @@
     "test": "bun test src"
   },
   "dependencies": {
+    "diff": "8.0.4",
     "effect": "4.0.5"
   },
   "devDependencies": {

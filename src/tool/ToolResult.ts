@@ -8,6 +8,7 @@
  */
 import { Schema } from 'effect'
 import type { Effect } from 'effect'
+import { ImageContent, TextContent } from '../model/Message.ts'
 import type { ToolCall, ToolResultMessage } from '../model/Message.ts'
 import type { Tx } from '../session/Session.ts'
 import type { TxError } from '../session/SessionError.ts'
@@ -34,7 +35,40 @@ export interface Result {
   readonly output: Content
   readonly isError: boolean
   readonly diagnostics: ReadonlyArray<Diagnostic>
+  /** Detail for programs and the UI, such as a diff; the model does not see it. */
+  readonly details?: Schema.Json
 }
+
+/**
+ * A handler's result in full, for a tool whose success or failure Schema is `Output`: the content
+ * the model sees, such as an image, remarks about the call, and details the model does not see.
+ * Any other value is shown as text, or as JSON.
+ */
+export const Output = Schema.Struct({
+  type: Schema.Literal('pi.tool-output'),
+  content: Schema.Array(Schema.Union([TextContent, ImageContent])),
+  diagnostics: Schema.optionalKey(Schema.Array(Diagnostic)),
+  details: Schema.optionalKey(Schema.Json),
+})
+export type Output = typeof Output.Type
+
+/** An `Output` with `content`. */
+export const output = (
+  content: Content,
+  options: {
+    readonly diagnostics?: ReadonlyArray<Diagnostic>
+    readonly details?: Schema.Json
+  } = {},
+): Output => ({ type: 'pi.tool-output', content, ...options })
+
+/** An `Output` of one text block. */
+export const text = (
+  value: string,
+  options: {
+    readonly diagnostics?: ReadonlyArray<Diagnostic>
+    readonly details?: Schema.Json
+  } = {},
+): Output => output(value === '' ? [] : [{ type: 'text', text: value }], options)
 
 /** An error diagnostic. */
 export const error = (code: string, message: string): Diagnostic => ({
@@ -66,6 +100,7 @@ export const message = (
     result.diagnostics.length === 0
       ? result.output
       : [...result.output, { type: 'text', text: render(result.diagnostics) }],
+  ...(result.details === undefined ? {} : { details: result.details }),
   isError: result.isError,
   timestamp: timing.timestamp,
   ...(timing.durationMs === undefined ? {} : { durationMs: timing.durationMs }),

@@ -53,6 +53,10 @@
     "./coding": {
       "types": "./dist/coding/index.d.ts",
       "default": "./dist/coding/index.js"
+    },
+    "./codemode": {
+      "types": "./dist/codemode/index.d.ts",
+      "default": "./dist/codemode/index.js"
     }
   },
   "scripts": {
@@ -67,6 +71,7 @@
     "test": "bun test src"
   },
   "dependencies": {
+    "@earendil-works/pi-codemode": "1.3.0",
     "diff": "8.0.4",
     "effect": "4.0.5"
   },

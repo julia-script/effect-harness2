@@ -36,7 +36,8 @@
         "src/model/LanguageModelProvider.ts",
         "src/model/internal/languageModel/**",
         "src/model/test/languageModel.test.ts",
-        "src/coding/**"
+        "src/coding/**",
+        "src/codemode/**"
       ],
       "rules": {
         "effecttsgo/unstable-api-usage": "off"

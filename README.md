@@ -340,6 +340,10 @@ const listed = yield * codex.listModels // needs HttpClient and Credentials, lik
 Anthropic subscriptions (Claude Pro/Max) are not supported: pi uses them by identifying as Claude
 Code, which this harness does not do. Use an Anthropic API key.
 
+When people add and remove accounts while the loop runs, route to a set that changes:
+`Model.layerDynamic(providers)` reads the providers at each request, for example from a
+`SubscriptionRef`. [examples/chatbot](examples/chatbot) does this from a browser.
+
 For any other backend, `LanguageModelProvider.make` adapts an effect/ai `LanguageModel`. Our
 loop runs the tools, so tool resolution is off; `languageModel` runs once per request.
 
@@ -353,6 +357,7 @@ One `Credentials` service. The layer you pick decides where the secrets live:
 | Layer                  | Where                                     |
 | ---------------------- | ----------------------------------------- |
 | `layerMemory(initial)` | in memory                                 |
+| `layerKeyValueStore()` | a `KeyValueStore`, such as files on disk  |
 | `layerConfig(names?)`  | `ConfigProvider` (.env), read-only        |
 | `layerRpc`             | a remote store, over any transport        |
 | `layerServer`          | serves the store in context to `layerRpc` |

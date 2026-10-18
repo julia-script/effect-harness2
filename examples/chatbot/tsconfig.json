@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "rootDir": "../..",
+    "noEmit": true,
+    "paths": {
+      "effect-harness/*": ["../../src/*/index.ts"]
+    }
+  },
+  "include": ["."]
+}

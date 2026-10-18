@@ -80,7 +80,7 @@ export const open = (
       .install(agent.tools === undefined ? extension : { ...extension, tools: agent.tools })
       .pipe(Effect.provideContext(implementations))
     yield* Generation.layer.pipe(
-      Layer.provide(Layer.succeed(Model.Model, Model.make([faux.provider]))),
+      Layer.provide(Model.layer([faux.provider])),
       Layer.provide(Layer.succeed(Extensions.Extensions, extensions)),
       Layer.provide(Layer.succeed(Registry.Registry, registry)),
       Layer.provide(Layer.succeed(Settings.Current, settings)),

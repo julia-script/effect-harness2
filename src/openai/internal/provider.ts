@@ -1,0 +1,54 @@
+/**
+ * The OpenAI provider over `@effect/ai-openai`, which stays an implementation detail: each request
+ * builds a client with the key and a language model configured from the request's options.
+ */
+import { OpenAiClient, OpenAiLanguageModel } from '@effect/ai-openai'
+import { Effect, Schema } from 'effect'
+import { stored } from '../../model/internal/apiKey.ts'
+import { effort, find } from '../../model/internal/catalog.ts'
+import * as LanguageModelProvider from '../../model/LanguageModelProvider.ts'
+import type { Info, Request } from '../../model/Model.ts'
+import type { Options } from '../OpenAi.ts'
+import { models as catalog } from './catalog.ts'
+
+const Effort = Schema.Literals(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+const isEffort = Schema.is(Effort)
+
+/** The request options OpenAI takes, for `model`. */
+const config = (model: Info, request: Request) => {
+  const options = request.options ?? {}
+  const level = options.reasoning
+  const entry = find(catalog, model.id)
+  const named = level === undefined ? undefined : (effort(entry, level) ?? level)
+  return {
+    ...(options.maxTokens === undefined ? {} : { max_output_tokens: options.maxTokens }),
+    ...(options.temperature === undefined || entry?.temperature === false
+      ? {}
+      : { temperature: options.temperature }),
+    ...(model.reasoning && named !== undefined && isEffort(named)
+      ? { reasoning: { effort: named } }
+      : {}),
+  }
+}
+
+export const make = (options: Options) =>
+  LanguageModelProvider.make({
+    name: 'openai',
+    api: 'openai-responses',
+    models: options.models ?? catalog,
+    languageModel: (model, request) =>
+      Effect.flatMap(
+        options.apiKey === undefined ? stored('openai') : Effect.succeed(options.apiKey),
+        (apiKey) =>
+          Effect.flatMap(
+            OpenAiClient.make({
+              apiKey,
+              ...(options.apiUrl === undefined ? {} : { apiUrl: options.apiUrl }),
+            }),
+            (client) =>
+              OpenAiLanguageModel.make({ model: model.id, config: config(model, request) }).pipe(
+                Effect.provideService(OpenAiClient.OpenAiClient, client),
+              ),
+          ),
+      ),
+  })

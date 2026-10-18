@@ -37,7 +37,7 @@ const setup = (scripts: ReadonlyArray<Script>) =>
       models: [{ id: 'm', cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } }],
       languageModel: () => languageModel,
     })
-    const model = Model.make([provider])
+    const model = yield* Model.make([provider])
     const info = provider.models[0]!
     const ask = (messages: ReadonlyArray<Message.Message>) =>
       Model.collect(model.stream({ model: { provider: 'acme', modelId: 'm' }, messages }), info)
@@ -226,7 +226,7 @@ describe('LanguageModelProvider', () => {
               })
             }),
         })
-        const model = Model.make([provider])
+        const model = yield* Model.make([provider])
         const request = { model: { provider: 'acme', modelId: 'm' }, messages: [user('hi')] }
         const ask = Model.collect(model.stream(request), provider.models[0]!)
         yield* ask

@@ -90,7 +90,8 @@ main.pipe(Effect.provide(BunServices.layer), Effect.runPromise)
 ```
 
 `BunServices.layer` gives the coding tools a file system, paths and a process spawner. To make
-it durable, swap `Storage.layerMemory` for a [store on disk](#storage).
+it durable, swap `Storage.layerMemory` for a [store on disk](#storage). To use a real model, swap
+`faux` for a [provider](#models).
 
 `HarnessServer.layer` builds the task registry, the extension registry and the built-in
 generation, tool and compaction tasks itself. Its options override the pieces:
@@ -273,30 +274,37 @@ script that crashes halfway replays without running its calls twice.
 The `Model` service sends each request to a provider by name. Responses stream as deltas and
 end with a `done` event.
 
-`LanguageModelProvider` wraps any effect/ai `LanguageModel`. Our loop runs the tools, so tool
-resolution is off. `languageModel` runs once per request, so read the credential there:
+A provider is a plain value. `effect-harness/openai` and `effect-harness/anthropic` ship one
+each, over `@effect/ai-openai` and `@effect/ai-anthropic` (optional peer dependencies; install the
+one you use). Their model lists come from pi-ai's catalog, with context windows, costs and how
+each model takes reasoning.
 
 ```ts
-// Yours to write:
-// anthropicModel(modelId, credential): Effect<LanguageModel, ModelError>
-// toModelError(error: CredentialsError): ModelError
+import { Anthropic } from 'effect-harness/anthropic'
+import { OpenAi } from 'effect-harness/openai'
 
-const Anthropic = Effect.gen(function* () {
-  const credentials = yield* Credentials.Credentials
-  return LanguageModelProvider.make({
-    name: 'anthropic',
-    api: 'anthropic-messages',
-    models: [{ id: 'claude-sonnet-5-5', reasoning: true, contextWindow: 200_000 }],
-    languageModel: (model) =>
-      credentials.get('anthropic').pipe(
-        Effect.mapError(toModelError),
-        Effect.flatMap((credential) => anthropicModel(model.id, credential)),
-      ),
-  })
-})
-
-const ModelLive = Model.layerEffect([Anthropic]).pipe(Layer.provide(Credentials.layerConfig()))
+const Loop = HarnessServer.layer({
+  extensions: [CodingTools.extension],
+  settings: { model: OpenAi.ref('gpt-5.5') },
+}).pipe(
+  Layer.provide([
+    CodingHandlers.layer,
+    Model.layer([
+      OpenAi.provider({ apiKey: Redacted.make('sk-...') }), // a fixed key
+      Anthropic.provider(), // the `anthropic` key from Credentials, read for each request
+    ]),
+    Storage.layerMemory,
+  ]),
+  Layer.provide([FetchHttpClient.layer, Credentials.layerConfig()]),
+)
 ```
+
+`Model.layer` needs what its providers need: an `HttpClient` for both, and `Credentials` for a
+provider without a key. `apiUrl` points one at a compatible server or a gateway, and `models`
+replaces its model list.
+
+For any other backend, `LanguageModelProvider.make` adapts an effect/ai `LanguageModel`. Our
+loop runs the tools, so tool resolution is off; `languageModel` runs once per request.
 
 `Faux` is pi-ai's scripted provider, for tests. It can stream text, thinking and tool calls,
 fail, or answer from the request.
@@ -405,6 +413,8 @@ tasks are all built this way.
 | `effect-harness/harness`     | `Harness`, `HarnessServer`, `Generation`, `Compaction`, `Extension(s)`, `Settings`, `ToolSearch` |
 | `effect-harness/tool`        | `Tool`, `Toolkit`, `ToolResult`, `Call`, `ToolTask`                                              |
 | `effect-harness/model`       | `Model`, `Message`, `LanguageModelProvider`, `Faux`                                              |
+| `effect-harness/openai`      | `OpenAi` provider and catalog                                                                    |
+| `effect-harness/anthropic`   | `Anthropic` provider and catalog                                                                 |
 | `effect-harness/credentials` | `Credentials`, `Credential`, `CredentialsRpcs`                                                   |
 | `effect-harness/coding`      | `CodingTools`, `CodingHandlers`                                                                  |
 | `effect-harness/codemode`    | `Codemode`, `CodemodeHandlers`                                                                   |

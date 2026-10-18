@@ -2,6 +2,7 @@
  * The `Model` service over providers: each request goes to the provider its model names.
  */
 import { Effect, Stream } from 'effect'
+import type { Context } from 'effect'
 import type { DeferredHandle } from '../Message.ts'
 import type { Info, Provider, Ref, Service } from '../Model.ts'
 import { ModelError, Rejected, UnknownModel } from '../ModelError.ts'
@@ -18,13 +19,13 @@ const unsupported = (model: Info) =>
     reason: new Rejected({}),
   })
 
-export const make = (providers: Iterable<Provider>): Service => {
+export const make = <R>(providers: Iterable<Provider<R>>, context: Context.Context<R>): Service => {
   // A later provider of the same name replaces an earlier one.
-  const byName = new Map<string, Provider>()
+  const byName = new Map<string, Provider<R>>()
   for (const provider of providers) byName.set(provider.name, provider)
   const all = [...byName.values()].flatMap((provider) => provider.models)
 
-  const find = (ref: Ref): readonly [Provider, Info] | undefined => {
+  const find = (ref: Ref): readonly [Provider<R>, Info] | undefined => {
     const provider = byName.get(ref.provider)
     const model = provider?.models.find((candidate) => candidate.id === ref.modelId)
     return provider === undefined || model === undefined ? undefined : [provider, model]
@@ -38,17 +39,21 @@ export const make = (providers: Iterable<Provider>): Service => {
     info: (ref) => find(ref)?.[1],
     stream: (request) =>
       Stream.unwrap(
-        Effect.map(resolved(request.model), ([provider, model]) => provider.stream(request, model)),
+        Effect.map(resolved(request.model), ([provider, model]) =>
+          Stream.provideContext(provider.stream(request, model), context),
+        ),
       ),
     poll: (ref, handle: DeferredHandle) =>
       Effect.flatMap(resolved(ref), ([provider, model]) =>
         provider.poll === undefined
           ? Effect.fail(unsupported(model))
-          : provider.poll(handle, model),
+          : Effect.provideContext(provider.poll(handle, model), context),
       ),
     cancel: (ref, handle) =>
       Effect.flatMap(resolved(ref), ([provider, model]) =>
-        provider.cancel === undefined ? Effect.void : provider.cancel(handle, model),
+        provider.cancel === undefined
+          ? Effect.void
+          : Effect.provideContext(provider.cancel(handle, model), context),
       ),
   }
 }

@@ -57,6 +57,14 @@
     "./codemode": {
       "types": "./dist/codemode/index.d.ts",
       "default": "./dist/codemode/index.js"
+    },
+    "./openai": {
+      "types": "./dist/openai/index.d.ts",
+      "default": "./dist/openai/index.js"
+    },
+    "./anthropic": {
+      "types": "./dist/anthropic/index.d.ts",
+      "default": "./dist/anthropic/index.js"
     }
   },
   "scripts": {
@@ -76,6 +84,8 @@
     "effect": "4.0.5"
   },
   "devDependencies": {
+    "@effect/ai-anthropic": "4.0.5",
+    "@effect/ai-openai": "4.0.5",
     "@effect/platform-bun": "4.0.5",
     "@effect/sql-pglite": "4.0.5",
     "@effect/sql-sqlite-bun": "4.0.5",
@@ -85,5 +95,17 @@
     "oxlint": "1.88.0",
     "oxlint-tsgolint": "7.0.2004",
     "typescript": "7.0.2"
+  },
+  "peerDependencies": {
+    "@effect/ai-anthropic": "4.0.5",
+    "@effect/ai-openai": "4.0.5"
+  },
+  "peerDependenciesMeta": {
+    "@effect/ai-anthropic": {
+      "optional": true
+    },
+    "@effect/ai-openai": {
+      "optional": true
+    }
   }
 }

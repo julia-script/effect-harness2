@@ -37,7 +37,10 @@
         "src/model/internal/languageModel/**",
         "src/model/test/languageModel.test.ts",
         "src/coding/**",
-        "src/codemode/**"
+        "src/codemode/**",
+        "src/openai/**",
+        "src/anthropic/**",
+        "src/model/test/fakeApi.ts"
       ],
       "rules": {
         "effecttsgo/unstable-api-usage": "off"

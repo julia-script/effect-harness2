@@ -18,6 +18,7 @@ import { withdrawQueuedInputs } from './inbox.ts'
 import { settleOutcome } from './run.ts'
 import * as Submissions from './submissions.ts'
 import { readsFirst } from './submissions.ts'
+import * as Views from './views/views.ts'
 
 const SCAN_PAGE_SIZE = 256
 
@@ -71,6 +72,7 @@ export const make = Effect.fnUntraced(function* (options: Options) {
     submissions,
     extensions,
     settings: yield* Settings.Current,
+    views: yield* Views.make(session),
   }
   const service: Service = {
     session,
@@ -84,6 +86,7 @@ export const make = Effect.fnUntraced(function* (options: Options) {
       create(host, { kind: 'independent', ownership: createOptions.ownership }, createOptions.init),
     submission: submissions.get,
     abortSubmission: submissions.abort,
+    taskGraph: host.views.taskGraph,
     inspect: Effect.gen(function* () {
       const { scheduling, tasks } = yield* scheduler.inspect
       const pending = yield* unsettled(storage, session)

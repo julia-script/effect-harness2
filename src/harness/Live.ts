@@ -1,82 +1,21 @@
 /**
  * The built-in `pi.live` document, ported from pi's `harness/live.ts`: run control of one
- * conversation, and the presentation of its running generation and tool round.
+ * conversation, and the presentation of its running generation and tool round. Its Schemas live
+ * in `ViewState`, which a client shares.
  */
-import { Effect, Schema } from 'effect'
-import { AssistantMessage } from '../model/Message.ts'
+import { Effect } from 'effect'
 import * as Document from '../session/Document.ts'
-import { EntryId, SubmissionId, TaskId } from '../storage/schema/Ids.ts'
+import type { LiveState as State } from './ViewState.ts'
 
-/** The task that settles a run's inputs, and those inputs. */
-export const Run = Schema.Struct({ taskId: TaskId, inputs: Schema.Array(SubmissionId) })
-export type Run = typeof Run.Type
-
-/** The current generation attempt. */
-export const Generation = Schema.Struct({
-  attempt: Schema.Finite,
-  /** The committed, throttled partial of the response being generated. */
-  message: Schema.optionalKey(AssistantMessage),
-  /** Durable backoff before the next attempt. */
-  retry: Schema.optionalKey(Schema.Struct({ at: Schema.Finite, error: Schema.String })),
-  /** A deferred response being polled. */
-  deferred: Schema.optionalKey(Schema.Struct({ pollAt: Schema.Finite })),
-})
-export type Generation = typeof Generation.Type
-
-/** One call of the current tool round. */
-export const ToolSlot = Schema.Struct({
-  callId: Schema.String,
-  name: Schema.String,
-  status: Schema.Literals(['pending', 'running', 'done']),
-  /**
-   * Absent for a call not started yet (sequential round), and for a call its request did not
-   * offer, which starts `done` with the result the generation wrote.
-   */
-  taskId: Schema.optionalKey(TaskId),
-  /** The result entry once done; absent when the tool task faulted or was orphaned. */
-  entry: Schema.optionalKey(EntryId),
-})
-export type ToolSlot = typeof ToolSlot.Type
-
-/** Why a compaction runs: `compact()`, a threshold in preparation, or a context overflow. */
-export const CompactionReason = Schema.Literals(['manual', 'threshold', 'overflow'])
-export type CompactionReason = typeof CompactionReason.Type
-
-/** One live compaction task. */
-export const CompactionStatus = Schema.Struct({
-  taskId: TaskId,
-  reason: CompactionReason,
-  /** Whether a generation waits for it: one the generation owns. */
-  blocking: Schema.Boolean,
-  attempt: Schema.Finite,
-  /** Durable backoff before the next summarization attempt. */
-  retry: Schema.optionalKey(Schema.Struct({ at: Schema.Finite, error: Schema.String })),
-})
-export type CompactionStatus = typeof CompactionStatus.Type
-
-/** The newest compaction that failed since one last produced a summary. */
-export const CompactionFailure = Schema.Struct({
-  taskId: TaskId,
-  reason: CompactionReason,
-  error: Schema.String,
-})
-export type CompactionFailure = typeof CompactionFailure.Type
-
-export const State = Schema.Struct({
-  /** Present exactly while the conversation is busy. */
-  run: Schema.optionalKey(Run),
-  generation: Schema.optionalKey(Generation),
-  /** The current tool round in call order, from the tool-calling answer until the round ends. */
-  tools: Schema.optionalKey(Schema.Array(ToolSlot)),
-  /** Live compaction tasks in task ID order; absent when none. */
-  compactions: Schema.optionalKey(Schema.Array(CompactionStatus)),
-  /**
-   * The newest compaction failure, kept after its task ended. A compaction that produces a summary
-   * removes it; one that is aborted or finds nothing to compact leaves it.
-   */
-  compactionFailure: Schema.optionalKey(CompactionFailure),
-})
-export type State = typeof State.Type
+export {
+  CompactionFailure,
+  CompactionReason,
+  CompactionStatus,
+  Generation,
+  LiveState as State,
+  Run,
+  ToolSlot,
+} from './ViewState.ts'
 
 /** One per conversation; every fork starts idle. */
 export const document = Document.make<State>({

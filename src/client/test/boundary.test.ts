@@ -37,10 +37,13 @@ const RUNTIME = new Set([
   'harness/Harness.ts',
 ])
 
+/** Internal modules a client may load: the pure replay of op batches behind `Ops.apply`. */
+const PURE = new Set(['delta/internal/apply.ts', 'delta/internal/json.ts', 'delta/internal/ops.ts'])
+
 describe('client boundary', () => {
   test('loads no internal module and no runtime service', () => {
     const loaded = [...reachable(resolve(SRC, 'client/index.ts'))]
-    expect(loaded.filter((file) => file.includes('/internal/'))).toEqual([])
+    expect(loaded.filter((file) => file.includes('/internal/') && !PURE.has(file))).toEqual([])
     expect(loaded.filter((file) => RUNTIME.has(file))).toEqual([])
     expect(loaded).toContain('client/HarnessRpcs.ts')
   })

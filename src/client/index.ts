@@ -20,3 +20,9 @@ export * as Submission from '../harness/Submission.ts'
 
 /** Errors the loop reports. */
 export * as HarnessError from '../harness/HarnessError.ts'
+
+/** Views and the task graph a client watches. */
+export * as ViewState from '../harness/ViewState.ts'
+
+/** Agent events a client watches. */
+export * as AgentEvent from '../harness/AgentEvent.ts'

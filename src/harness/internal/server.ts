@@ -1,7 +1,7 @@
 /**
  * The loop side of `HarnessRpcs`: each request on the `Harness` in context.
  */
-import { Effect } from 'effect'
+import { Effect, Stream } from 'effect'
 import type { Rpc, RpcGroup } from 'effect/rpc'
 import { HarnessRpcs } from '../../client/HarnessRpcs.ts'
 import type { Call } from '../../client/Init.ts'
@@ -14,6 +14,7 @@ import type { Service } from '../Harness.ts'
 import { InitFailed, SubmissionNotFound } from '../HarnessError.ts'
 import type { Initializer } from '../Initializer.ts'
 import type { Submission } from '../Submission.ts'
+import type { Watch } from '../ViewState.ts'
 
 /** The `init` option a named call resolves to; unknown names fail before any commit. */
 const resolver = (initializers: ReadonlyArray<Initializer>) => {
@@ -31,11 +32,11 @@ const resolver = (initializers: ReadonlyArray<Initializer>) => {
   }
 }
 
-const withConversation = <A, E>(
+const withConversation = <A, E, R = never>(
   harness: Service,
   id: ConversationId,
-  f: (conversation: Conversation) => Effect.Effect<A, E>,
-): Effect.Effect<A, E | CommitError> =>
+  f: (conversation: Conversation) => Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | CommitError, R> =>
   Effect.flatMap(harness.conversation(id), (conversation) =>
     conversation === undefined
       ? Effect.fail<E | CommitError>(
@@ -130,6 +131,33 @@ const conversations = (
     withConversation(harness, conversationId, (conversation) => conversation.waitForIdle),
 })
 
+/** A watch as frames: its value, then its changes' operations. */
+const frames = <T, E>(watch: Watch<T, E>) =>
+  Stream.concat(
+    Stream.succeed({ type: 'value' as const, value: watch.value }),
+    Stream.map(watch.changes, ({ ops }) => ({ type: 'change' as const, ops })),
+  )
+
+const watches = (
+  harness: Service,
+): Pick<Handlers, 'WatchView' | 'WatchEvents' | 'WatchTaskGraph'> => ({
+  WatchView: ({ conversationId }) =>
+    Stream.unwrap(
+      withConversation(harness, conversationId, (conversation) =>
+        Effect.map(conversation.view, frames),
+      ),
+    ),
+  WatchEvents: ({ conversationId }) =>
+    Stream.unwrap(
+      withConversation(harness, conversationId, (conversation) =>
+        Effect.map(conversation.events, (events) =>
+          Stream.concat(Stream.succeed([events.snapshot]), events.batches),
+        ),
+      ),
+    ),
+  WatchTaskGraph: () => Stream.unwrap(Effect.map(harness.taskGraph, frames)),
+})
+
 const submissions = (
   harness: Service,
 ): Pick<
@@ -155,6 +183,7 @@ export const handlers = (initializers: ReadonlyArray<Initializer>) =>
         ...creations(harness, resolver(initializers)),
         ...conversations(harness),
         ...submissions(harness),
+        ...watches(harness),
       }),
     ),
   )

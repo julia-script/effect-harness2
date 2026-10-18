@@ -4,7 +4,7 @@ import type { ConversationId } from '../../storage/schema/Ids.ts'
 import type { DocumentAddress } from '../../storage/schema/Document.ts'
 import type { JsonObject } from '../../storage/schema/Json.ts'
 import type { SessionClosed, SessionFailed, SnapshotError } from '../SessionError.ts'
-import type { Cache } from './cache.ts'
+import type { Cache, Loaded } from './cache.ts'
 import {
   checkRecordScope,
   checkRecordVersion,
@@ -44,11 +44,28 @@ export const snapshot = Effect.fnUntraced(function* (
     hit?.valueVersion === definition.version
       ? hit
       : yield* onLine(cache.load(definition, id, address))
-  if (loaded === undefined) return undefined
-  yield* checkRecordScope(definition, loaded.record)
-  yield* checkRecordVersion(definition, loaded.record, loaded.storedVersion)
-  return yield* loaded.tracker.value
+  return yield* valueOf(definition, loaded)
 })
+
+/** The committed value of a loaded incarnation, once its scope and version check out. */
+const valueOf = (definition: AnyToken['definition'], loaded: Loaded | undefined) =>
+  loaded === undefined
+    ? Effect.undefined
+    : Effect.andThen(
+        Effect.andThen(
+          checkRecordScope(definition, loaded.record),
+          checkRecordVersion(definition, loaded.record, loaded.storedVersion),
+        ),
+        loaded.tracker.value,
+      )
+
+/** A committed read by a caller that holds the line already, such as a transaction. */
+export const snapshotOnLine = (cache: Cache, token: AnyToken, args: ReadonlyArray<unknown>) =>
+  Effect.flatMap(resolveAddress(token.definition, args), ({ address, id }) =>
+    Effect.flatMap(cache.load(token.definition, id, address), (loaded) =>
+      valueOf(token.definition, loaded),
+    ),
+  )
 
 /** Read the incarnation alive at an entry's commit, in the conversation that owns the entry. */
 const readAsOf = Effect.fnUntraced(function* (

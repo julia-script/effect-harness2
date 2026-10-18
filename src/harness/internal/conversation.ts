@@ -17,6 +17,7 @@ import { createCompaction } from './compaction/status.ts'
 import { RESET_KIND } from './inbox.ts'
 import type { Submissions } from './submissions.ts'
 import { readsFirst } from './submissions.ts'
+import type { Views } from './views/views.ts'
 
 export interface Host {
   readonly session: SessionService
@@ -24,6 +25,7 @@ export interface Host {
   readonly submissions: Submissions
   readonly extensions: Extensions
   readonly settings: Effect.Effect<Settings>
+  readonly views: Views
 }
 
 /** Where a conversation is created. */
@@ -105,6 +107,8 @@ export const conversation = (host: Host, id: ConversationId): Conversation => ({
     readsFirst(
       host.session.commit((tx) => tx.scanEntries({ ...query, conversationId: id }, limit, cursor)),
     ),
+  view: host.views.view(id),
+  events: host.views.events(id),
   fork: (at, options) =>
     create(host, { kind: 'fork', parentId: id, at, ownership: options.ownership }, options.init),
   abort: (options) => host.scheduler.abortConversation(id, options),

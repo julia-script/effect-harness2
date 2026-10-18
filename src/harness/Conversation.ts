@@ -2,17 +2,19 @@
  * Conversation handles, ported from pi's `Conversation`. A handle is stateless and bound to the
  * Harness that returned it; compare handles by `id`.
  */
-import type { Effect } from 'effect'
+import type { Effect, Scope } from 'effect'
 import type { ConversationOwnership, TransactionScope, Tx } from '../session/Session.ts'
-import type { CommitError, SnapshotError } from '../session/SessionError.ts'
+import type { CommitError, SessionFailed, SnapshotError } from '../session/SessionError.ts'
 import type { EntryRecord } from '../storage/schema/Entry.ts'
 import type { ConversationId, EntryId, TaskId } from '../storage/schema/Ids.ts'
 import type { Cursor, EntryQuery, Page } from '../storage/schema/Scan.ts'
 import type { StorageError } from '../storage/StorageError.ts'
 import type { SchedulerClosed, TaskNotFound } from '../task/TaskError.ts'
+import type * as AgentEvent from './AgentEvent.ts'
 import type * as AgentState from './AgentState.ts'
 import type { ConversationBusy, InvalidSubmission } from './HarnessError.ts'
 import type { Draft, Submission } from './Submission.ts'
+import type { ConversationView, Watch } from './ViewState.ts'
 
 /**
  * Runs inside the creating commit, after the built-in documents. The conversation record is
@@ -81,6 +83,13 @@ export interface Conversation {
     limit: number,
     cursor?: Cursor,
   ) => Effect.Effect<Page<EntryRecord>, CommitError>
+  /**
+   * Watch the active transcript and built-in documents, from their committed state now, while
+   * the scope is open. Changes fail with `SessionFailed` when the Session fails.
+   */
+  readonly view: Effect.Effect<Watch<ConversationView, SessionFailed>, CommitError, Scope.Scope>
+  /** Watch the conversation's agent events, from a snapshot now, while the scope is open. */
+  readonly events: Effect.Effect<AgentEvent.Events<SessionFailed>, CommitError, Scope.Scope>
   /** Fork this conversation at a visible entry, in one commit. */
   readonly fork: <E = never>(
     at: EntryId,

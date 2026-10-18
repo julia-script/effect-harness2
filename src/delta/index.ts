@@ -7,3 +7,6 @@ export * as Tracker from './Tracker.ts'
 
 /** Errors a `Tracker` reports. */
 export * as DeltaError from './DeltaError.ts'
+
+/** Replaying op batches onto immutable values. */
+export * as Ops from './Ops.ts'

@@ -7,6 +7,7 @@ import type { AnyToken } from './documents.ts'
 import { assemble } from './transaction/assemble.ts'
 import { stageConversation, stageFork, stageRootConversation } from './transaction/conversations.ts'
 import { abortChanges, doc, prepareChanges, retireDoc } from './transaction/documents.ts'
+import { snapshotOnLine } from './snapshots.ts'
 import * as Records from './transaction/records.ts'
 import { assertOpen, committedTask, makeState, read, rejected, write } from './transaction/state.ts'
 import type { Host, TxState } from './transaction/state.ts'
@@ -77,6 +78,9 @@ const makeTx = (state: TxState): Tx => {
       read(state, 'scanTasks', guard(storage.scanTasks(query, limit, cursor))),
     latestHeadMarker: (conversationId) =>
       read(state, 'latestHeadMarker', guard(storage.findLatestHeadMarker(conversationId))),
+    snapshot: cast((token: AnyToken, ...args: ReadonlyArray<unknown>) =>
+      read(state, 'snapshot', snapshotOnLine(state.host.cache, token, args)),
+    ),
     ...conversationWrites(state, () => tx),
     appendEntry: (conversationId, draft) =>
       write(state, Records.appendEntry(state, conversationId, draft)),

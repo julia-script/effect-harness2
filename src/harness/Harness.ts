@@ -17,7 +17,7 @@ import type { Duration, Scope } from 'effect'
 import * as Rpcs from '../client/HarnessRpcs.ts'
 import { Session } from '../session/Session.ts'
 import type { Service as SessionService, Tx } from '../session/Session.ts'
-import type { CommitError, TxDocumentError } from '../session/SessionError.ts'
+import type { CommitError, SessionFailed, TxDocumentError } from '../session/SessionError.ts'
 import type { ConversationRecord } from '../storage/schema/Conversation.ts'
 import type { ConversationId, SubmissionId } from '../storage/schema/Ids.ts'
 import type { Storage } from '../storage/Storage.ts'
@@ -29,6 +29,7 @@ import type { Conversation, CreateOptions, Init } from './Conversation.ts'
 import type { Extensions } from './Extensions.ts'
 import * as internal from './internal/harness.ts'
 import type { AbortResult, Submission } from './Submission.ts'
+import type { TaskGraph, Watch } from './ViewState.ts'
 
 /** Live work: scheduling state, every live task, and the queued and placed submissions. */
 export const Inspection = Rpcs.Inspection
@@ -73,6 +74,8 @@ export interface Service {
     id: SubmissionId,
     conversationId?: ConversationId,
   ) => Effect.Effect<AbortResult | 'not_found', CommitError>
+  /** Watch every live task, from the committed state now, while the scope is open. */
+  readonly taskGraph: Effect.Effect<Watch<TaskGraph, SessionFailed>, CommitError, Scope.Scope>
   /** Live tasks and unsettled submissions. Writes nothing and runs no task code. */
   readonly inspect: Effect.Effect<Inspection, CommitError | StorageError>
 }

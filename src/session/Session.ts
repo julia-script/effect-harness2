@@ -27,6 +27,7 @@ import * as internal from './internal/session.ts'
 import type * as Observation from './Observation.ts'
 import type {
   CommitError,
+  DocumentError,
   SessionClosed,
   SessionFailed,
   TxDocumentError,
@@ -162,6 +163,11 @@ export interface Tx {
   readonly latestHeadMarker: (
     conversationId: ConversationId,
   ) => Effect.Effect<(EntryRecord & { readonly head: EntryId }) | undefined, TxReadError>
+  /**
+   * A document's committed value, as `Session.snapshot` reads it; never creates one, and ignores
+   * this transaction's drafts. A table read: it fails after the first table write.
+   */
+  readonly snapshot: Document.Reads<TxReadError | DocumentError>
   /** Create a conversation with explicitly selected ownership. */
   readonly createConversation: (options: {
     readonly ownership: ConversationOwnership

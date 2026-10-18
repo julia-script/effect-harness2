@@ -53,3 +53,9 @@ export * as Agent from './Agent.ts'
 
 /** What an agent is made of, as Schemas the client shares. */
 export * as AgentState from './AgentState.ts'
+
+/** What a client sees of the loop: built-in document states, views, and the task graph. */
+export * as ViewState from './ViewState.ts'
+
+/** Agent events: one conversation's activity, batch by batch. */
+export * as AgentEvent from './AgentEvent.ts'

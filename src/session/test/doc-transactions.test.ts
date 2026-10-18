@@ -295,6 +295,40 @@ describe('Session document transactions', () => {
       }),
     ))
 
+  test('reads committed values in a transaction, before its first table write', () =>
+    run((harness) =>
+      Effect.gen(function* () {
+        const { session } = harness
+        const conversationId = yield* createConversation(session)
+        const before = harness.commits.length
+        expect(yield* session.commit((tx) => tx.snapshot(LiveDoc, conversationId))).toBeUndefined()
+        expect(harness.commits.length).toBe(before)
+        yield* session.commit((tx) =>
+          Effect.map(tx.doc(LiveDoc, conversationId), (draft) => {
+            draft.items.push('a')
+          }),
+        )
+        const read = yield* session.commit((tx) =>
+          Effect.gen(function* () {
+            const draft = yield* tx.doc(LiveDoc, conversationId)
+            draft.items.push('b')
+            // Drafts of this transaction are not committed.
+            return yield* tx.snapshot(LiveDoc, conversationId)
+          }),
+        )
+        expect(read?.items).toEqual(['a'])
+        const refused = yield* Effect.flip(
+          session.commit((tx) =>
+            Effect.andThen(
+              tx.appendEntry(conversationId, { kind: 'note' }),
+              tx.snapshot(LiveDoc, conversationId),
+            ),
+          ),
+        )
+        expect(refused).toBeInstanceOf(SessionError.ReadAfterWrite)
+      }),
+    ))
+
   test('returns shared immutable snapshots and keeps prior revisions stable', () =>
     run((harness) =>
       Effect.gen(function* () {

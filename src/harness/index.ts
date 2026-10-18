@@ -21,6 +21,12 @@ export * as Submission from './Submission.ts'
 /** The built-in `pi.inbox` document. */
 export * as Inbox from './Inbox.ts'
 
+/** The built-in generation task: one model request of a run, and its tool round. */
+export * as Generation from './Generation.ts'
+
+/** Errors of the generation task. */
+export * as GenerationError from './GenerationError.ts'
+
 /** The built-in `pi.live` document. */
 export * as Live from './Live.ts'
 

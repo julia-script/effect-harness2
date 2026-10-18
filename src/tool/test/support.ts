@@ -61,28 +61,26 @@ const slow = (name: string, { started, release, runs }: Script) =>
     return `${name} done`
   })
 
+/** Scripted handlers for `toolkit`. */
+export const slowHandlers = (current: Script): Toolkit.Handlers<typeof toolkit.tools> => ({
+  read: ({ path }, { config }) => {
+    if (path === 'missing') return Effect.fail({ reason: `${path} not found` })
+    if (path === 'boom') return Effect.die(new Error('disk on fire'))
+    return Effect.succeed(`contents of ${config.root ?? ''}${path}`)
+  },
+  lines: ({ lines }) =>
+    Effect.succeed(Array.from({ length: lines }, (_, index) => `line ${index + 1}`).join('\n')),
+  slow: () => slow('slow', current),
+  slow_safe: () => slow('slow_safe', current),
+})
+
 /** The tool task over `toolkit` with scripted handlers. */
 export const tasks = (
   current: Script,
   options: ToolTask.Options<typeof toolkit.tools> = {},
 ): Effect.Effect<ToolTask.ToolTask, never, Scope.Scope> =>
-  Effect.map(
-    Layer.build(
-      toolkit.toLayer({
-        read: ({ path }, { config }) => {
-          if (path === 'missing') return Effect.fail({ reason: `${path} not found` })
-          if (path === 'boom') return Effect.die(new Error('disk on fire'))
-          return Effect.succeed(`contents of ${config.root ?? ''}${path}`)
-        },
-        lines: ({ lines }) =>
-          Effect.succeed(
-            Array.from({ length: lines }, (_, index) => `line ${index + 1}`).join('\n'),
-          ),
-        slow: () => slow('slow', current),
-        slow_safe: () => slow('slow_safe', current),
-      }),
-    ),
-    (implementations) => ToolTask.make(toolkit, implementations, options),
+  Effect.map(Layer.build(toolkit.toLayer(slowHandlers(current))), (implementations) =>
+    ToolTask.make(toolkit, implementations, options),
   )
 
 /** Commit an assistant entry calling `name` with `args`, and the tool task for the call. */

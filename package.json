@@ -45,6 +45,10 @@
     "./model": {
       "types": "./dist/model/index.d.ts",
       "default": "./dist/model/index.js"
+    },
+    "./tool": {
+      "types": "./dist/tool/index.d.ts",
+      "default": "./dist/tool/index.js"
     }
   },
   "scripts": {

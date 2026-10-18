@@ -35,7 +35,8 @@
         "src/credentials/**",
         "src/model/LanguageModelProvider.ts",
         "src/model/internal/languageModel/**",
-        "src/model/test/languageModel.test.ts"
+        "src/model/test/languageModel.test.ts",
+        "src/tool/**"
       ],
       "rules": {
         "effecttsgo/unstable-api-usage": "off"

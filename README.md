@@ -303,6 +303,20 @@ const Loop = HarnessServer.layer({
 provider without a key. `apiUrl` points one at a compatible server or a gateway, and `models`
 replaces its model list.
 
+Codex runs on a ChatGPT subscription. Sign in once from the client, which stores the tokens in
+`Credentials`; the provider refreshes them before they expire, so the store must be writable:
+
+```ts
+// client, once
+yield* OpenAiCodex.login({ onCode: ({ url, code }) => Console.log(`Open ${url}, enter ${code}`) })
+
+// loop
+Model.layer([OpenAiCodex.provider()]) // settings: { model: OpenAiCodex.ref('gpt-5.5') }
+```
+
+Anthropic subscriptions (Claude Pro/Max) are not supported: pi uses them by identifying as Claude
+Code, which this harness does not do. Use an Anthropic API key.
+
 For any other backend, `LanguageModelProvider.make` adapts an effect/ai `LanguageModel`. Our
 loop runs the tools, so tool resolution is off; `languageModel` runs once per request.
 
@@ -413,7 +427,7 @@ tasks are all built this way.
 | `effect-harness/harness`     | `Harness`, `HarnessServer`, `Generation`, `Compaction`, `Extension(s)`, `Settings`, `ToolSearch` |
 | `effect-harness/tool`        | `Tool`, `Toolkit`, `ToolResult`, `Call`, `ToolTask`                                              |
 | `effect-harness/model`       | `Model`, `Message`, `LanguageModelProvider`, `Faux`                                              |
-| `effect-harness/openai`      | `OpenAi` provider and catalog                                                                    |
+| `effect-harness/openai`      | `OpenAi` and `OpenAiCodex` providers and catalogs                                                |
 | `effect-harness/anthropic`   | `Anthropic` provider and catalog                                                                 |
 | `effect-harness/credentials` | `Credentials`, `Credential`, `CredentialsRpcs`                                                   |
 | `effect-harness/coding`      | `CodingTools`, `CodingHandlers`                                                                  |

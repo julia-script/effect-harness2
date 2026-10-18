@@ -1,6 +1,7 @@
 /**
- * Test support: a local HTTP server standing in for a provider API. It records each request and
- * answers with the server-sent events `respond` gives.
+ * Test support: a local HTTP server standing in for a provider API. It records each request, its
+ * JSON or form body decoded, and answers with the server-sent events `respond` gives, or with a
+ * `Reply`.
  */
 import { Effect } from 'effect'
 import type { Scope } from 'effect'
@@ -17,12 +18,32 @@ export interface FakeApi {
   readonly requests: ReadonlyArray<Recorded>
 }
 
+/** A JSON answer, for endpoints that do not stream. */
+export interface Reply {
+  readonly status?: number
+  readonly json: unknown
+}
+
+const body = (text: string, contentType: string | null): unknown => {
+  if (text === '') return undefined
+  if (contentType?.includes('json') === true) return JSON.parse(text)
+  return Object.fromEntries(new URLSearchParams(text))
+}
+
+const answer = (reply: ReadonlyArray<unknown> | Reply) =>
+  'json' in reply
+    ? new Response(JSON.stringify(reply.json), {
+        status: reply.status ?? 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    : new Response(sse(reply), { headers: { 'content-type': 'text/event-stream' } })
+
 const sse = (events: ReadonlyArray<unknown>) =>
   events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')
 
 /** Serve on an ephemeral port while the scope is open. */
 export const serve = (
-  respond: (request: Recorded) => ReadonlyArray<unknown>,
+  respond: (request: Recorded) => ReadonlyArray<unknown> | Reply,
 ): Effect.Effect<FakeApi, never, Scope.Scope> =>
   Effect.map(
     Effect.acquireRelease(
@@ -36,12 +57,10 @@ export const serve = (
               const recorded: Recorded = {
                 path: new URL(request.url).pathname,
                 headers: Object.fromEntries(request.headers),
-                body: text === '' ? undefined : JSON.parse(text),
+                body: body(text, request.headers.get('content-type')),
               }
               requests.push(recorded)
-              return new Response(sse(respond(recorded)), {
-                headers: { 'content-type': 'text/event-stream' },
-              })
+              return answer(respond(recorded))
             }),
         })
         return { server, requests }

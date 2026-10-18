@@ -6,6 +6,7 @@ import { OpenAiClient, OpenAiLanguageModel } from '@effect/ai-openai'
 import { Effect, Schema } from 'effect'
 import { stored } from '../../model/internal/apiKey.ts'
 import { effort, find } from '../../model/internal/catalog.ts'
+import type { Entry } from '../../model/internal/catalog.ts'
 import * as LanguageModelProvider from '../../model/LanguageModelProvider.ts'
 import type { Info, Request } from '../../model/Model.ts'
 import type { Options } from '../OpenAi.ts'
@@ -14,11 +15,11 @@ import { models as catalog } from './catalog.ts'
 const Effort = Schema.Literals(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 const isEffort = Schema.is(Effort)
 
-/** The request options OpenAI takes, for `model`. */
-const config = (model: Info, request: Request) => {
+/** The Responses API options for `model`, with its entry in `models` for efforts and temperature. */
+export const config = (model: Info, request: Request, models: ReadonlyArray<Entry> = catalog) => {
   const options = request.options ?? {}
   const level = options.reasoning
-  const entry = find(catalog, model.id)
+  const entry = find(models, model.id)
   const named = level === undefined ? undefined : (effort(entry, level) ?? level)
   return {
     ...(options.maxTokens === undefined ? {} : { max_output_tokens: options.maxTokens }),

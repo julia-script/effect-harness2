@@ -89,6 +89,19 @@ const admit = (runtime: ToolRuntime, call: ToolCall, request: Request, abandonOn
       .pipe(Effect.flatMap(() => Effect.orDie(Effect.fromNullishOr(admitted))))
   })
 
+/** Commit `change` bound to the task, leaving its state; what `change` returned. */
+const commitWith = <A, E>(runtime: ToolRuntime, change: (tx: Tx) => Effect.Effect<A, E>) =>
+  Effect.suspend(() => {
+    let value: Option.Option<A> = Option.none()
+    return runtime
+      .commit((tx) =>
+        Effect.map(change(tx), (result) => {
+          value = Option.some(result)
+        }),
+      )
+      .pipe(Effect.flatMap(() => Effect.orDie(Effect.fromOption(value))))
+  })
+
 /** What a caller gets for a nested call that stored no outcome: one the scheduler ended. */
 const fallback = (name: string, outcome: TaskOutcome): Call.Outcome => {
   const message =
@@ -120,6 +133,9 @@ export const make = (runtime: ToolRuntime, call: ToolCall, replay: 'safe' | 'uns
     conversationId: runtime.conversationId,
     callId: call.id,
     execute,
+    commit: (change) => commitWith(runtime, change),
+    snapshot: runtime.snapshot,
+    getTask: runtime.getTask,
   }
   return {
     service,

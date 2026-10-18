@@ -12,9 +12,10 @@
  * `pi.tool.nested-call` family, and retires with it.
  */
 import { Context, Effect, Schema } from 'effect'
+import type { Tx } from '../session/Session.ts'
 import type { ConversationId, TaskId } from '../storage/schema/Ids.ts'
 import type { JsonObject } from '../storage/schema/Json.ts'
-import type { RuntimeError } from '../task/Task.ts'
+import type { Runtime, RuntimeError } from '../task/Task.ts'
 import { NestedCallRefused } from './ToolError.ts'
 import { Diagnostic } from './ToolResult.ts'
 
@@ -38,11 +39,18 @@ export interface Options {
 
 export type Failure = NestedCallRefused | RuntimeError
 
-/** The tool call a handler runs for. */
-export interface Service {
+/**
+ * The tool call a handler runs for. Its documents are the tool task's: a handler that keeps
+ * durable state of its own, as code mode does, commits it through `commit`, bound to the task.
+ */
+export interface Service extends Pick<Runtime<unknown, unknown, unknown>, 'snapshot' | 'getTask'> {
   readonly taskId: TaskId
   readonly conversationId: ConversationId
   readonly callId: string
+  /** Commit `change` bound to the tool task, leaving its state; what `change` returned. */
+  readonly commit: <A, E>(
+    change: (tx: Tx) => Effect.Effect<A, E>,
+  ) => Effect.Effect<A, E | RuntimeError>
   /** Call tool `name` with `args`, encoded, and wait for its outcome. */
   readonly execute: (
     name: string,

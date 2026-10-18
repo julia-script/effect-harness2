@@ -1,0 +1,105 @@
+/**
+ * The `Credentials` service: where provider secrets live. The loop reads a credential before each
+ * model request; a client sets, lists and removes them; an OAuth refresh writes back with a
+ * compare-and-set. The layer decides where they are kept: in memory, in `Config` such as a `.env`
+ * file, or in a remote store reached over `CredentialsRpcs`. A client and its loops share a store
+ * by providing the same layer.
+ */
+import { Context, Effect, Layer } from 'effect'
+import type { Duration, Scope } from 'effect'
+import { RpcServer } from 'effect/rpc'
+import type { RpcClient } from 'effect/rpc'
+import type { Credential, Info, OAuth } from './Credential.ts'
+import type { CredentialChanged, CredentialsError, ReadOnly } from './CredentialsError.ts'
+import { CredentialsRpcs } from './CredentialsRpcs.ts'
+import * as config from './internal/config.ts'
+import * as memory from './internal/memory.ts'
+import * as resolver from './internal/resolve.ts'
+import * as rpc from './internal/rpc.ts'
+
+export interface Service {
+  /** The stored credential, possibly expired; `resolve` refreshes it. */
+  readonly get: (provider: string) => Effect.Effect<Credential | undefined, CredentialsError>
+  /** What is stored, without secrets. */
+  readonly list: Effect.Effect<ReadonlyArray<Info>, CredentialsError>
+  readonly set: (
+    provider: string,
+    credential: Credential,
+  ) => Effect.Effect<void, CredentialsError | ReadOnly>
+  readonly remove: (provider: string) => Effect.Effect<void, CredentialsError | ReadOnly>
+  /** Replace `expected` with `next`; fails `CredentialChanged` when `expected` is not stored. */
+  readonly update: (
+    provider: string,
+    expected: Credential,
+    next: Credential,
+  ) => Effect.Effect<void, CredentialChanged | CredentialsError | ReadOnly>
+}
+
+export class Credentials extends Context.Service<Credentials, Service>()(
+  'effect-harness/credentials/Credentials',
+) {}
+
+/** A store in memory, for tests and single-process hosts. */
+export const makeMemory = (
+  initial: Iterable<readonly [string, Credential]> = [],
+): Effect.Effect<Service> => memory.make(initial)
+
+export const layerMemory = (initial: Iterable<readonly [string, Credential]> = []) =>
+  Layer.effect(Credentials, makeMemory(initial))
+
+/** Config names to read, per provider: the first that is set is its API key. */
+export type Names = Readonly<Record<string, ReadonlyArray<string>>>
+
+/** The variables pi reads for the common providers. */
+export const defaultNames: Names = {
+  anthropic: ['ANTHROPIC_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'],
+  openai: ['OPENAI_API_KEY'],
+  google: ['GEMINI_API_KEY'],
+  openrouter: ['OPENROUTER_API_KEY'],
+  xai: ['XAI_API_KEY'],
+  groq: ['GROQ_API_KEY'],
+  mistral: ['MISTRAL_API_KEY'],
+  deepseek: ['DEEPSEEK_API_KEY'],
+}
+
+/**
+ * API keys from the `ConfigProvider` in context, read at every `get`. Writes fail `ReadOnly`, so
+ * credentials that need refreshing cannot live here.
+ */
+export const makeConfig = (names: Names = defaultNames): Service => config.make(names)
+
+export const layerConfig = (names: Names = defaultNames) =>
+  Layer.succeed(Credentials, makeConfig(names))
+
+/** A remote store, over the `RpcClient.Protocol` in context; transport failures are `CredentialsError`. */
+export const makeRpc: Effect.Effect<Service, never, RpcClient.Protocol | Scope.Scope> =
+  rpc.makeClient
+
+export const layerRpc: Layer.Layer<Credentials, never, RpcClient.Protocol> = Layer.effect(
+  Credentials,
+  makeRpc,
+)
+
+/** Serve the `Credentials` in context over the `RpcServer.Protocol` in context. */
+export const layerServer: Layer.Layer<never, never, Credentials | RpcServer.Protocol> =
+  RpcServer.layer(CredentialsRpcs).pipe(Layer.provide(rpc.handlers(Credentials)))
+
+export interface ResolveOptions<E> {
+  /** New tokens for `credential`, from the provider. */
+  readonly refresh: (provider: string, credential: OAuth) => Effect.Effect<OAuth, E>
+  /** Refresh tokens that expire sooner than this. Default: five minutes. */
+  readonly minValidity?: Duration.Input
+}
+
+/**
+ * A reader of fresh credentials, for one loop: OAuth tokens near expiry are refreshed, at most
+ * one refresh per provider at a time, and written back with `update`. When another writer
+ * refreshed first, its tokens are returned.
+ */
+export const makeResolver: <E>(
+  options: ResolveOptions<E>,
+) => Effect.Effect<
+  (provider: string) => Effect.Effect<Credential | undefined, E | CredentialsError | ReadOnly>,
+  never,
+  Credentials
+> = resolver.make

@@ -23,11 +23,27 @@ export const ToolFilter = Schema.Union([
 ])
 export type ToolFilter = typeof ToolFilter.Type
 
+/**
+ * Which of the enabled tools the model is offered. Unset: every one except deferred tools. An
+ * array: exactly these, in order, deferred ones too. `{ remove, add }`: every one except deferred
+ * tools and those in `remove`, then the deferred tools in `add`, in `add` order.
+ */
+export const ModelTools = Schema.Union([
+  Schema.Array(Schema.String),
+  Schema.Struct({
+    remove: Schema.optionalKey(Schema.Array(Schema.String)),
+    add: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
+])
+export type ModelTools = typeof ModelTools.Type
+
 export const State = Schema.Struct({
   model: Schema.optionalKey(ModelRef),
   reasoning: Schema.optionalKey(ModelThinkingLevel),
   extensions: Schema.optionalKey(Selection),
   tools: Schema.optionalKey(ToolFilter),
+  /** Tools a call loads, such as `tool_search`'s, are added to its `add`. */
+  modelTools: Schema.optionalKey(ModelTools),
   /** Appended to the system prompt as the last section, `instructions`. */
   instructions: Schema.optionalKey(Schema.String),
   /** Encoded tool config by tool name, over the config its extension installs it with. */
@@ -41,6 +57,7 @@ export const Change = Schema.Struct({
   reasoning: Schema.optionalKey(Schema.NullOr(ModelThinkingLevel)),
   extensions: Schema.optionalKey(Schema.NullOr(Selection)),
   tools: Schema.optionalKey(Schema.NullOr(ToolFilter)),
+  modelTools: Schema.optionalKey(Schema.NullOr(ModelTools)),
   instructions: Schema.optionalKey(Schema.NullOr(Schema.String)),
   config: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.Json))),
 })
@@ -51,7 +68,10 @@ export const View = Schema.Struct({
   model: Schema.optionalKey(ModelRef),
   reasoning: ModelThinkingLevel,
   extensions: Schema.Array(Schema.String),
+  /** The tools the model is offered, in order. */
   tools: Schema.Array(Schema.String),
+  /** Enabled deferred tools it is not offered yet, when there are any. */
+  deferred: Schema.optionalKey(Schema.Array(Schema.String)),
   sections: Schema.Array(Schema.String),
   instructions: Schema.optionalKey(Schema.String),
 })

@@ -26,7 +26,7 @@
  *
  * Credentials are the provider's: a provider reads them fresh for each request.
  */
-import { Effect, Layer, Schema } from 'effect'
+import { Effect, Layer, Option, Schema } from 'effect'
 import { DeferredHandle } from '../model/Message.ts'
 import type { AssistantMessage, Message } from '../model/Message.ts'
 import * as Model from '../model/Model.ts'
@@ -140,6 +140,22 @@ export const make: Effect.Effect<Generation, never, Model.Model | Extensions> = 
   },
 )
 
+/** `installed` with its handler running under `Agent.Current`. */
+const withAgent = (
+  agent: Agent.Resolved,
+  installed: ToolTask.Installed | undefined,
+): ToolTask.Installed | undefined =>
+  installed === undefined
+    ? undefined
+    : {
+        ...installed,
+        runner: Option.map(installed.runner, (runner) => ({
+          ...runner,
+          run: (args, context) =>
+            Effect.provideService(runner.run(args, context), Agent.Current, agent),
+        })),
+      }
+
 /** The tool task over the tools and hooks of each call's conversation agent. */
 export const toolTask: Effect.Effect<ToolTask.ToolTask, never, Extensions> = Effect.gen(
   function* () {
@@ -150,7 +166,11 @@ export const toolTask: Effect.Effect<ToolTask.ToolTask, never, Extensions> = Eff
         Effect.map(
           currentAgent(api, api.conversationId, extensions, settings),
           (agent): ToolTask.Resolution => ({
-            tool: (tool) => agent.tools.find((each) => each.tool.name === tool),
+            tool: (tool) =>
+              withAgent(
+                agent,
+                agent.tools.find((each) => each.tool.name === tool),
+              ),
             hooks: Agent.hooks(agent, ToolTask.Hooks),
           }),
         ),

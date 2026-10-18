@@ -16,17 +16,19 @@
  *   an earlier one in place; then the selected extensions' tool wrappers; then the `tools` filter:
  *   an array keeps exactly those names in its order, `{ remove }` drops names. A tool's config is
  *   the stored `config[name]` when set, else its extension's.
+ * - Offered tools: the enabled tools through `modelTools`; deferred tools only once loaded.
  * - Sections: the same way, then `instructions` last, as the tagged section `instructions`.
  * - Model and reasoning: stored, else the settings' defaults.
  *
  * The document is rewindable: a fork starts from the agent at its fork entry, and a task-owned
  * conversation starts with a copy of its owner's.
  */
-import { Effect } from 'effect'
+import { Context, Effect } from 'effect'
 import type { ModelThinkingLevel } from '../model/Message.ts'
 import type * as Model from '../model/Model.ts'
 import * as Document from '../session/Document.ts'
 import type { Tx } from '../session/Session.ts'
+import type { TxDocumentError } from '../session/SessionError.ts'
 import type { ConversationRecord } from '../storage/schema/Conversation.ts'
 import type { ConversationId } from '../storage/schema/Ids.ts'
 import * as Hook from '../task/Hook.ts'
@@ -49,7 +51,15 @@ export const document = Document.make<State>({
   checkpointWhen: () => Effect.succeed(true),
 })
 
-const FIELDS = ['model', 'reasoning', 'extensions', 'tools', 'instructions', 'config'] as const
+const FIELDS = [
+  'model',
+  'reasoning',
+  'extensions',
+  'tools',
+  'modelTools',
+  'instructions',
+  'config',
+] as const
 
 /** Apply `change` to the conversation's `pi.agent`. */
 export const configure = (tx: Tx, conversationId: ConversationId, change: Change) =>
@@ -75,13 +85,38 @@ export const created = (tx: Tx, record: ConversationRecord) =>
     Object.assign(agent, strictJson({ ...owner }))
   })
 
+/**
+ * Load tools by name into the conversation's offered tools, as a call's `addTools` control does:
+ * an array `tools` or `modelTools` gets each name it lacks appended, a `remove` loses them, and
+ * an unset or object `modelTools` gets them in its `add`. A name not registered now is offered
+ * once it is.
+ */
+export const addTools: (
+  tx: Tx,
+  conversationId: ConversationId,
+  names: ReadonlyArray<string>,
+) => Effect.Effect<void, TxDocumentError> = internal.addTools
+
+/**
+ * The agent of the call a tool handler runs, while the tool task runs it for a conversation;
+ * `undefined` elsewhere. A handler reads it with `yield* Agent.Current`.
+ */
+export const Current: Context.Reference<Resolved | undefined> = Context.Reference(
+  'effect-harness/harness/Agent/Current',
+  { defaultValue: (): Resolved | undefined => undefined },
+)
+
 /** The agent of one decision. */
 export interface Resolved {
   readonly model?: Model.Ref
   readonly reasoning: ModelThinkingLevel
   readonly extensions: ReadonlyArray<Extensions.Installed>
-  /** The enabled tools, in order: what a request offers, and what a call may run. */
+  /** The enabled tools, in order: what a call may run. */
   readonly tools: ReadonlyArray<ToolTask.Installed>
+  /** The enabled tools `modelTools` selects, in order: what a request offers. */
+  readonly offered: ReadonlyArray<ToolTask.Installed>
+  /** Enabled deferred tools not offered yet, in order: what `tool_search` searches. */
+  readonly deferred: ReadonlyArray<ToolTask.Installed>
   readonly sections: ReadonlyArray<Extension.Section>
   readonly instructions?: string
 }
@@ -109,7 +144,8 @@ export const view = (agent: Resolved): View => ({
   ...(agent.model === undefined ? {} : { model: agent.model }),
   reasoning: agent.reasoning,
   extensions: agent.extensions.map(({ extension }) => extension.name),
-  tools: agent.tools.map(({ tool }) => tool.name),
+  tools: agent.offered.map(({ tool }) => tool.name),
+  ...(agent.deferred.length === 0 ? {} : { deferred: agent.deferred.map(({ tool }) => tool.name) }),
   sections: agent.sections.map(({ key }) => key),
   ...(agent.instructions === undefined ? {} : { instructions: agent.instructions }),
 })

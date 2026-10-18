@@ -62,12 +62,13 @@ const isOutput = Schema.is(ToolResult.Output)
 /** An encoded success or failure as the result the model sees, within the tool's limits. */
 const resultOf = (tool: Any, encoded: unknown, isError: boolean): ToolResult.Result => {
   if (!isOutput(encoded)) return bounded(tool, contentOf(encoded), isError)
-  const { content, diagnostics = [], details } = encoded
+  const { content, diagnostics = [], details, control } = encoded
   return rebound(tool, {
     output: content,
     isError,
     diagnostics,
     ...(details === undefined ? {} : { details }),
+    ...(control === undefined ? {} : { control }),
   })
 }
 

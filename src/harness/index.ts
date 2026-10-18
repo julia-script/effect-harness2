@@ -59,3 +59,6 @@ export * as ViewState from './ViewState.ts'
 
 /** Agent events: one conversation's activity, batch by batch. */
 export * as AgentEvent from './AgentEvent.ts'
+
+/** The `tool_search` tool, which loads deferred tools. */
+export * as ToolSearch from './ToolSearch.ts'

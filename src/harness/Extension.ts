@@ -22,7 +22,7 @@ import type * as Agent from './Agent.ts'
 /** What a section renders from. */
 export interface SectionInput {
   readonly conversationId: ConversationId
-  /** The agent of this request; `agent.tools` are the tools it offers. */
+  /** The agent of this request; `agent.offered` are the tools it offers. */
   readonly agent: Agent.Resolved
   /** The sections the model sees now, by key, after replaying the transcript. */
   readonly shown: Readonly<Record<string, string>>

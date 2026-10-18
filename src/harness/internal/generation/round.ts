@@ -111,12 +111,19 @@ export const startToolRound = (
  * The round's tasks are terminal: pass the `postTools` boundary and hand the run to the next
  * generation, or, for a queued reset, end it.
  */
-const finishToolRound = (runtime: GenerationRuntime, env: Env, assistant: EntryId) =>
-  Effect.andThen(
-    afterTools(runtime, env, assistant),
-    runtime.commit((tx) =>
+const finishToolRound = (
+  runtime: GenerationRuntime,
+  env: Env,
+  assistant: EntryId,
+  tools: ReadonlyArray<TaskId>,
+) =>
+  Effect.gen(function* () {
+    const added = yield* addedTools(runtime, tools)
+    yield* afterTools(runtime, env, assistant)
+    return yield* runtime.commit((tx) =>
       Effect.gen(function* () {
         const boundary = yield* prepareBoundary(tx, runtime.conversationId, yield* env.settings)
+        if (added.length > 0) yield* Agent.addTools(tx, runtime.conversationId, added)
         yield* continueRun(tx, boundary, runtime.taskId)
         const next: Next = {
           status: 'terminal',
@@ -124,6 +131,21 @@ const finishToolRound = (runtime: GenerationRuntime, env: Env, assistant: EntryI
         }
         return next
       }),
+    )
+  })
+
+const decodeResult = Schema.decodeUnknownOption(ToolTask.Result)
+
+/** The tools the round's calls load, in call order. */
+const addedTools = (runtime: GenerationRuntime, tools: ReadonlyArray<TaskId>) =>
+  Effect.map(runtime.outcomes(tools), (outcomes) =>
+    outcomes.flatMap((outcome) =>
+      outcome.status === 'completed'
+        ? Option.match(decodeResult(outcome.result), {
+            onNone: () => [],
+            onSome: ({ control }) => control?.addTools ?? [],
+          })
+        : [],
     ),
   )
 
@@ -157,7 +179,7 @@ export const toolsPhase =
     Effect.gen(function* () {
       const { assistant, tools, pending } = task.state.checkpoint
       const [next, ...rest] = pending
-      if (next === undefined) return yield* finishToolRound(runtime, env, assistant)
+      if (next === undefined) return yield* finishToolRound(runtime, env, assistant, tools)
       return yield* runtime.commit((tx) =>
         Effect.gen(function* () {
           const live = yield* tx.doc(Live.document, runtime.conversationId)

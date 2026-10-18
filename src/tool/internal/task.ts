@@ -75,7 +75,11 @@ const settleIn = (tx: Tx, runtime: ToolRuntime, lifecycle: Lifecycle, call: Tool
       ran.durationMs === undefined ? { timestamp } : { timestamp, durationMs: ran.durationMs }
     const entry = yield* ToolResult.append(tx, runtime.conversationId, call, ran.result, timing)
     if (lifecycle.settled !== undefined) yield* lifecycle.settled(tx, callOf(runtime), entry.id)
-    return terminal(ran.ending, { entryId: entry.id })
+    const { control } = ran.result
+    return terminal(ran.ending, {
+      entryId: entry.id,
+      ...(control === undefined ? {} : { control }),
+    })
   })
 
 /** Settle with the call read on the line. */

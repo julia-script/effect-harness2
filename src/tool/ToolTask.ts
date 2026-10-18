@@ -37,6 +37,7 @@ import * as Hook from '../task/Hook.ts'
 import { Registry } from '../task/Registry.ts'
 import * as Task from '../task/Task.ts'
 import type * as ToolResult from './ToolResult.ts'
+import { Control as ToolResultControl } from './ToolResult.ts'
 import * as internalExecute from './internal/execute.ts'
 import * as internal from './internal/task.ts'
 import type * as Tool from './Tool.ts'
@@ -60,8 +61,11 @@ export const Checkpoint = Schema.Union([
 ])
 export type Checkpoint = typeof Checkpoint.Type
 
-/** The call's result entry. */
-export const Result = Schema.Struct({ entryId: EntryId })
+/** The call's result entry, and what the call asks of its generation. */
+export const Result = Schema.Struct({
+  entryId: EntryId,
+  control: Schema.optionalKey(ToolResultControl),
+})
 export type Result = typeof Result.Type
 
 export type ToolTask = Task.Task<Input, Checkpoint, Result>

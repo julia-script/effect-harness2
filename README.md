@@ -308,7 +308,7 @@ Codex runs on a ChatGPT subscription. Sign in once from the client, which stores
 
 ```ts
 // client, once
-yield* OpenAiCodex.login({ onCode: ({ url, code }) => Console.log(`Open ${url}, enter ${code}`) })
+yield * OpenAiCodex.login({ onCode: ({ url, code }) => Console.log(`Open ${url}, enter ${code}`) })
 
 // loop
 Model.layer([OpenAiCodex.provider()]) // settings: { model: OpenAiCodex.ref('gpt-5.5') }

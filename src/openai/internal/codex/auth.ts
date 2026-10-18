@@ -177,8 +177,12 @@ export const login = (authUrl: string, onCode: (code: DeviceCode) => Effect.Effe
     )
   })
 
-/** `login`, storing the tokens under `openai-codex`. */
-export const store = (authUrl: string, onCode: (code: DeviceCode) => Effect.Effect<void>) =>
+/** `login`, storing the tokens under `name`. */
+export const store = (
+  name: string,
+  authUrl: string,
+  onCode: (code: DeviceCode) => Effect.Effect<void>,
+) =>
   Effect.flatMap(login(authUrl, onCode), (stored) =>
-    Effect.flatMap(Credentials, (credentials) => credentials.set('openai-codex', stored)),
+    Effect.flatMap(Credentials, (credentials) => credentials.set(name, stored)),
   )

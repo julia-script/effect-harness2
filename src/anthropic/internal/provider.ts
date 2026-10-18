@@ -62,12 +62,14 @@ const config = (model: Info, request: Request) => {
 
 export const make = (options: Options) =>
   LanguageModelProvider.make({
-    name: 'anthropic',
+    name: options.name ?? 'anthropic',
     api: 'anthropic-messages',
     models: options.models ?? catalog,
     languageModel: (model, request) =>
       Effect.flatMap(
-        options.apiKey === undefined ? stored('anthropic') : Effect.succeed(options.apiKey),
+        options.apiKey === undefined
+          ? stored(options.name ?? 'anthropic')
+          : Effect.succeed(options.apiKey),
         (apiKey) =>
           Effect.flatMap(
             AnthropicClient.make({

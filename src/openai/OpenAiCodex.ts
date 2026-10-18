@@ -1,7 +1,7 @@
 /**
  * Codex through a ChatGPT subscription, ported from pi-ai's `openai-codex` provider. Sign in once
- * with `login`, which stores OAuth tokens in `Credentials` under `openai-codex`; `provider` reads
- * them for each request, refreshing tokens near expiry and writing them back. The store must be
+ * with `login`, which stores OAuth tokens in `Credentials` under the provider's name; `provider`
+ * reads them for each request, refreshing tokens near expiry and writing them back. The store must be
  * writable, so a read-only one like `Credentials.layerConfig` cannot hold them.
  */
 import { Schema } from 'effect'
@@ -14,7 +14,7 @@ import { models as catalog } from './internal/codex/catalog.ts'
 import * as auth from './internal/codex/auth.ts'
 import * as internal from './internal/codex/provider.ts'
 
-/** The provider name requests route by, and the credential its tokens are stored under. */
+/** The provider name requests route by, and the credential its tokens are stored under, by default. */
 export const name = 'openai-codex'
 
 /** The API its responses name. */
@@ -36,6 +36,11 @@ export const DeviceCode = Schema.Struct({ url: Schema.String, code: Schema.Strin
 export type DeviceCode = typeof DeviceCode.Type
 
 export interface Options {
+  /**
+   * The name requests route by and the tokens are stored under. Default `openai-codex`; give each
+   * account its own, such as `codex-work`, and sign in to each with `login({ name })`.
+   */
+  readonly name?: string
   /** Default `https://chatgpt.com/backend-api`. */
   readonly baseUrl?: string
   /** Default `https://auth.openai.com`, where tokens are refreshed. */
@@ -53,6 +58,8 @@ export const provider = (options: Options = {}): Provider<HttpClient.HttpClient 
 export interface LoginOptions {
   /** Show the person the URL and code; the login waits for them to approve it. */
   readonly onCode: (code: DeviceCode) => Effect.Effect<void>
+  /** The provider name to store the tokens under. Default `openai-codex`. */
+  readonly name?: string
   /** Default `https://auth.openai.com`. */
   readonly authUrl?: string
 }
@@ -64,7 +71,10 @@ export const login = (
   void,
   LoginError | CredentialsError | ReadOnly,
   HttpClient.HttpClient | Credentials
-> => auth.store(options.authUrl ?? auth.AUTH_URL, options.onCode)
+> => auth.store(options.name ?? name, options.authUrl ?? auth.AUTH_URL, options.onCode)
 
-/** The `Model.Ref` of Codex model `modelId`. */
-export const ref = (modelId: string): Ref => ({ provider: name, modelId })
+/** The `Model.Ref` of Codex model `modelId`, served by the provider named `providerName`. */
+export const ref = (modelId: string, providerName: string = name): Ref => ({
+  provider: providerName,
+  modelId,
+})

@@ -162,6 +162,41 @@ describe('OpenAiCodex', () => {
     expect(value).toMatchObject({ type: 'oauth', extra: { accountId: 'acct_new' } })
   })
 
+  test('two accounts sign in and answer under their own names', async () => {
+    pendingPolls.clear()
+    const { value, requests } = await run((url) =>
+      Effect.gen(function* () {
+        yield* OpenAiCodex.login({ name: 'codex-work', authUrl: url, onCode: () => Effect.void })
+        const store = yield* Credentials.Credentials
+        yield* store.set('codex-home', stored(Date.now() + 3_600_000))
+        const model = yield* Model.make(
+          ['codex-work', 'codex-home'].map((name) =>
+            OpenAiCodex.provider({ name, baseUrl: url, authUrl: url }),
+          ),
+        )
+        const askOn = (name: string) => {
+          const ref = OpenAiCodex.ref('gpt-5.5', name)
+          const info = model.info(ref)
+          return info === undefined
+            ? Effect.die(`no ${name}`)
+            : Model.collect(model.stream({ model: ref, messages: [user('hi')] }), info)
+        }
+        const answers = [yield* askOn('codex-home'), yield* askOn('codex-work')]
+        return {
+          providers: answers.map((answer) => answer.provider),
+          stored: (yield* store.list).map((info) => info.provider),
+        }
+      }),
+    )
+    expect(value.providers).toEqual(['codex-home', 'codex-work'])
+    expect(value.stored.toSorted()).toEqual(['codex-home', 'codex-work'])
+    const sent = requests.filter((request) => request.path === '/codex/responses')
+    expect(sent.map((request) => request.headers['chatgpt-account-id'])).toEqual([
+      'acct_1',
+      'acct_new',
+    ])
+  }, 10_000)
+
   test('without stored tokens, a request fails asking to sign in', async () => {
     const { value } = await run((url) => Effect.flip(ask(url, 'gpt-5.5')))
     expect(value.message).toContain('Sign in to Codex first')

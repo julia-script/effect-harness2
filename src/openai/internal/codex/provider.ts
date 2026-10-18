@@ -16,7 +16,6 @@ import { config as responsesConfig } from '../provider.ts'
 import { AUTH_URL, accountId, refresh } from './auth.ts'
 import { models as catalog } from './catalog.ts'
 
-const NAME = 'openai-codex'
 const BASE_URL = 'https://chatgpt.com/backend-api'
 
 const rejected = (message: string, cause?: unknown) =>
@@ -36,6 +35,7 @@ const config = (model: Info, request: Request) => {
 }
 
 export const make = (options: Options) => {
+  const name = options.name ?? 'openai-codex'
   // One refresh at a time for this provider, so concurrent requests near expiry refresh once.
   const line = Semaphore.makeUnsafe(1)
   const authUrl = options.authUrl ?? AUTH_URL
@@ -44,17 +44,17 @@ export const make = (options: Options) => {
       refresh: (_provider, stored) =>
         Effect.provideService(refresh(authUrl, stored), HttpClient.HttpClient, http),
     }).pipe(
-      Effect.flatMap((resolve) => resolve(NAME)),
+      Effect.flatMap((resolve) => resolve(name)),
       Semaphore.withPermit(line),
       Effect.mapError((cause) => rejected(`Codex credentials: ${cause.message}`, cause)),
       Effect.flatMap((credential) =>
         credential?.type === 'oauth'
           ? Effect.succeed(Redacted.value(credential.access))
-          : Effect.fail(rejected('Sign in to Codex first: no openai-codex tokens are stored')),
+          : Effect.fail(rejected(`Sign in to Codex first: no ${name} tokens are stored`)),
       ),
     )
   return LanguageModelProvider.make({
-    name: NAME,
+    name,
     api: 'openai-codex-responses',
     models: options.models ?? catalog,
     system: 'separate',

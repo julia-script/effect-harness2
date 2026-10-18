@@ -34,12 +34,14 @@ export const config = (model: Info, request: Request, models: ReadonlyArray<Entr
 
 export const make = (options: Options) =>
   LanguageModelProvider.make({
-    name: 'openai',
+    name: options.name ?? 'openai',
     api: 'openai-responses',
     models: options.models ?? catalog,
     languageModel: (model, request) =>
       Effect.flatMap(
-        options.apiKey === undefined ? stored('openai') : Effect.succeed(options.apiKey),
+        options.apiKey === undefined
+          ? stored(options.name ?? 'openai')
+          : Effect.succeed(options.apiKey),
         (apiKey) =>
           Effect.flatMap(
             OpenAiClient.make({

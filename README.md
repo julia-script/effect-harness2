@@ -314,6 +314,19 @@ yield * OpenAiCodex.login({ onCode: ({ url, code }) => Console.log(`Open ${url},
 Model.layer([OpenAiCodex.provider()]) // settings: { model: OpenAiCodex.ref('gpt-5.5') }
 ```
 
+Each provider holds one account, named by `name`, which is also what its requests route by and
+its credential is stored under. For several accounts, give each provider its own name:
+
+```ts
+yield * OpenAiCodex.login({ name: 'codex-work', onCode })
+
+Model.layer([
+  OpenAiCodex.provider({ name: 'codex-work' }),
+  OpenAiCodex.provider({ name: 'codex-home' }),
+  OpenAi.provider({ name: 'openai-team' }), // reads the `openai-team` API key
+]) // settings: { model: OpenAiCodex.ref('gpt-5.5', 'codex-work') }
+```
+
 Anthropic subscriptions (Claude Pro/Max) are not supported: pi uses them by identifying as Claude
 Code, which this harness does not do. Use an Anthropic API key.
 

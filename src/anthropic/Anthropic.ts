@@ -10,7 +10,7 @@ import type { Definition, Provider, Ref } from '../model/Model.ts'
 import { models as catalog } from './internal/catalog.ts'
 import * as internal from './internal/provider.ts'
 
-/** The provider name requests route by. */
+/** The provider name requests route by, and its API key's name in `Credentials`, by default. */
 export const name = 'anthropic'
 
 /** The API its responses name. */
@@ -20,7 +20,12 @@ export const api = 'anthropic-messages'
 export const models: ReadonlyArray<Definition> = catalog
 
 export interface Options {
-  /** Without it, each request reads the `anthropic` API key from `Credentials`. */
+  /**
+   * The name requests route by and the API key is stored under. Default `anthropic`; give each
+   * account its own, such as `anthropic-work`.
+   */
+  readonly name?: string
+  /** Without it, each request reads the API key stored under `name` from `Credentials`. */
   readonly apiKey?: Redacted.Redacted
   /** Default `https://api.anthropic.com`; set it for a gateway. */
   readonly apiUrl?: string
@@ -38,5 +43,8 @@ export function provider(options: Options = {}): Provider<HttpClient.HttpClient 
   return internal.make(options)
 }
 
-/** The `Model.Ref` of Anthropic model `modelId`, for settings and agents. */
-export const ref = (modelId: string): Ref => ({ provider: name, modelId })
+/** The `Model.Ref` of Anthropic model `modelId`, served by the provider named `providerName`. */
+export const ref = (modelId: string, providerName: string = name): Ref => ({
+  provider: providerName,
+  modelId,
+})

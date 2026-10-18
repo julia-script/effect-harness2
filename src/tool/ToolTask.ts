@@ -29,10 +29,13 @@ import { Effect, Layer, Schema } from 'effect'
 import type { Context } from 'effect'
 import type { TaskKind, Tx } from '../session/Session.ts'
 import type { TxDocumentError } from '../session/SessionError.ts'
-import { EntryId } from '../storage/schema/Ids.ts'
-import type { ConversationId, TaskId } from '../storage/schema/Ids.ts'
+import { EntryId, TaskId } from '../storage/schema/Ids.ts'
+import type { ConversationId } from '../storage/schema/Ids.ts'
 import { JsonObject } from '../storage/schema/Json.ts'
+import { ToolCall as ToolCallSchema } from '../model/Message.ts'
 import type { ToolCall } from '../model/Message.ts'
+import * as Document from '../session/Document.ts'
+import type { Outcome } from './Call.ts'
 import * as Hook from '../task/Hook.ts'
 import { Registry } from '../task/Registry.ts'
 import * as Task from '../task/Task.ts'
@@ -47,7 +50,23 @@ import type * as Toolkit from './Toolkit.ts'
 export const name = internal.NAME
 
 /** A model-issued call: the assistant entry that holds it, and its ID there. */
-export const Input = Schema.Struct({ assistant: EntryId, callId: Schema.String })
+export const ModelInput = Schema.Struct({ assistant: EntryId, callId: Schema.String })
+export type ModelInput = typeof ModelInput.Type
+
+/**
+ * A nested call a running tool made (see `Call`): the calling task and its call, the call's key
+ * there, and the call itself, which no entry holds.
+ */
+export const NestedInput = Schema.Struct({
+  kind: Schema.Literal('nested'),
+  parent: TaskId,
+  parentCallId: Schema.String,
+  key: Schema.String,
+  call: ToolCallSchema,
+})
+export type NestedInput = typeof NestedInput.Type
+
+export const Input = Schema.Union([ModelInput, NestedInput])
 export type Input = typeof Input.Type
 
 export const Checkpoint = Schema.Union([
@@ -61,12 +80,39 @@ export const Checkpoint = Schema.Union([
 ])
 export type Checkpoint = typeof Checkpoint.Type
 
-/** The call's result entry, and what the call asks of its generation. */
-export const Result = Schema.Struct({
+/** A model-issued call's result entry, and what the call asks of its generation. */
+export const ModelResult = Schema.Struct({
   entryId: EntryId,
   control: Schema.optionalKey(ToolResultControl),
 })
+export type ModelResult = typeof ModelResult.Type
+
+/** A nested call's outcome is in its caller's `NestedCalls` member, so the receipt stays small. */
+export const NestedResult = Schema.Struct({ kind: Schema.Literal('nested') })
+
+export const Result = Schema.Union([ModelResult, NestedResult])
 export type Result = typeof Result.Type
+
+/** One nested call of a running tool: its task, and once it ended, its outcome. */
+export interface NestedCallState {
+  [key: string]: Schema.Json
+  /** Absent only inside the commit that creates the call. */
+  taskId?: number
+  result?: Outcome
+}
+
+/**
+ * The nested calls of a tool call, by key: a task-scoped family of the calling task, so a rerun
+ * finds the calls it made, and retired with it. The nested call's own terminal commit writes its
+ * outcome.
+ */
+export const NestedCalls = Document.makeFamily<NestedCallState, null>({
+  kind: 'pi.tool.nested-call',
+  version: 1,
+  family: true,
+  scope: 'task',
+  initial: () => Effect.succeed({}),
+})
 
 export type ToolTask = Task.Task<Input, Checkpoint, Result>
 
@@ -125,9 +171,12 @@ export const Hooks: Hook.Kind<Hooks> = Hook.kind<Hooks>(name)
 /** A tool the task can run: its declaration, its implementation if any, and its config, encoded. */
 export type Installed = internalExecute.Installed
 
-/** What a call resolves against: the tool of a name, and the hooks it asks, in order. */
+/**
+ * What a call resolves against: the tool of a name that `caller` may call, and the hooks it asks,
+ * in order.
+ */
 export interface Resolution {
-  readonly tool: (name: string) => Installed | undefined
+  readonly tool: (name: string, caller: Tool.Caller) => Installed | undefined
   readonly hooks: ReadonlyArray<Partial<Hooks>>
 }
 
@@ -154,7 +203,13 @@ export const make = <Tools extends Record<string, Tool.Any>>(
     implementations,
     options.config ?? {},
   )
-  const resolution: Resolution = { tool: (tool) => tools.get(tool), hooks: [] }
+  const resolution: Resolution = {
+    tool: (toolName, caller) => {
+      const found = tools.get(toolName)
+      return found?.tool.callers.includes(caller) === true ? found : undefined
+    },
+    hooks: [],
+  }
   return makeWith(() => Effect.succeed(resolution), options.lifecycle)
 }
 

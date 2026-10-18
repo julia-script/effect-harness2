@@ -147,8 +147,10 @@ export const resolve = (state: State | undefined, snapshot: Snapshot, settings: 
       const { name } = tool.tool
       enabled.push(Object.hasOwn(config, name) ? { ...tool, config: config[name] } : tool)
     }
-    const offered = offer(enabled, state?.modelTools)
-    const deferred = enabled.filter((each) => each.tool.deferred && !offered.includes(each))
+    const byModel = enabled.filter(({ tool }) => tool.callers.includes('model'))
+    const offered = offer(byModel, state?.modelTools)
+    const deferred = byModel.filter((each) => each.tool.deferred && !offered.includes(each))
+    const callable = enabled.filter(({ tool }) => tool.callers.includes('tools'))
     const instructions = state?.instructions
     const agentSections = [...sections.values()]
     if (instructions !== undefined)
@@ -159,6 +161,7 @@ export const resolve = (state: State | undefined, snapshot: Snapshot, settings: 
       reasoning: state?.reasoning ?? settings.reasoning ?? 'off',
       extensions,
       tools: enabled,
+      callable,
       offered,
       deferred,
       sections: agentSections,

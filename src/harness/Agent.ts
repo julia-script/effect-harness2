@@ -111,9 +111,11 @@ export interface Resolved {
   readonly model?: Model.Ref
   readonly reasoning: ModelThinkingLevel
   readonly extensions: ReadonlyArray<Extensions.Installed>
-  /** The enabled tools, in order: what a call may run. */
+  /** The enabled tools, in order. */
   readonly tools: ReadonlyArray<ToolTask.Installed>
-  /** The enabled tools `modelTools` selects, in order: what a request offers. */
+  /** The enabled tools other tools may call, in order: what nested calls resolve among. */
+  readonly callable: ReadonlyArray<ToolTask.Installed>
+  /** The enabled tools the model may call that `modelTools` selects, in order: what it offers. */
   readonly offered: ReadonlyArray<ToolTask.Installed>
   /** Enabled deferred tools not offered yet, in order: what `tool_search` searches. */
   readonly deferred: ReadonlyArray<ToolTask.Installed>

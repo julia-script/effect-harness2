@@ -12,7 +12,9 @@ import type { RpcClient } from 'effect/rpc'
 import type { Credential, Info, OAuth } from './Credential.ts'
 import type { CredentialChanged, CredentialsError, ReadOnly } from './CredentialsError.ts'
 import { CredentialsRpcs } from './CredentialsRpcs.ts'
+import type { KeyValueStore } from 'effect/persistence'
 import * as config from './internal/config.ts'
+import * as keyValueStore from './internal/keyValueStore.ts'
 import * as memory from './internal/memory.ts'
 import * as resolver from './internal/resolve.ts'
 import * as rpc from './internal/rpc.ts'
@@ -46,6 +48,21 @@ export const makeMemory = (
 
 export const layerMemory = (initial: Iterable<readonly [string, Credential]> = []) =>
   Layer.effect(Credentials, makeMemory(initial))
+
+/**
+ * A writable store that survives restarts: every credential as JSON under `key` of the
+ * `KeyValueStore` in context, such as `KeyValueStore.layerFileSystem(dir)`. Secrets are stored as
+ * plain strings, as pi's `auth.json` is, so keep the store private. Writes run one at a time in
+ * this process; two processes must not share one store.
+ */
+export const makeKeyValueStore = (
+  key = 'credentials',
+): Effect.Effect<Service, never, KeyValueStore.KeyValueStore> => keyValueStore.make(key)
+
+export const layerKeyValueStore = (
+  key = 'credentials',
+): Layer.Layer<Credentials, never, KeyValueStore.KeyValueStore> =>
+  Layer.effect(Credentials, makeKeyValueStore(key))
 
 /** Config names to read, per provider: the first that is set is its API key. */
 export type Names = Readonly<Record<string, ReadonlyArray<string>>>

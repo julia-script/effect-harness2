@@ -1,11 +1,12 @@
 /* oxlint-disable max-lines-per-function -- describe blocks */
 /**
  * The stores, and the resolver over them. Every writable store passes the same cases: memory, and
- * memory behind `CredentialsRpcs` across the memory transport.
+ * memory behind `CredentialsRpcs` across the memory transport, and a `KeyValueStore`.
  */
 import { describe, expect, test } from 'bun:test'
 import { Clock, ConfigProvider, Deferred, Effect, Exit, Fiber, Layer, Redacted } from 'effect'
 import type { Scope } from 'effect'
+import { KeyValueStore } from 'effect/persistence'
 import { HarnessTransport } from '../../client/index.ts'
 import { runTest } from '../../task/test/support.ts'
 import { Credentials } from '../index.ts'
@@ -42,6 +43,12 @@ const remote = (
     return yield* Effect.provideContext(Credentials.makeRpc, transport)
   })
 
+/** `effect` over an in-memory `KeyValueStore`, open while the scope is. */
+const withKeyValue = <A, E>(effect: Effect.Effect<A, E, KeyValueStore.KeyValueStore>) =>
+  Effect.flatMap(Layer.build(KeyValueStore.layerMemory), (context) =>
+    Effect.provideContext(effect, context),
+  )
+
 const stores: ReadonlyArray<
   readonly [string, Effect.Effect<Credentials.Service, never, Scope.Scope>]
 > = [
@@ -49,6 +56,7 @@ const stores: ReadonlyArray<
   ['rpc', remote(HarnessTransport.makeMemory)],
   // Secrets cross as strings and decode back to `Redacted`.
   ['encoded rpc', remote(HarnessTransport.makeMemoryEncoded)],
+  ['key-value', withKeyValue(Credentials.makeKeyValueStore())],
 ]
 
 for (const [name, open] of stores) {
@@ -87,6 +95,26 @@ for (const [name, open] of stores) {
       ))
   })
 }
+
+describe('key-value store', () => {
+  test('keeps credentials across reopening, with secrets decoded', () =>
+    runTest(() =>
+      Effect.gen(function* () {
+        const first = yield* Credentials.makeKeyValueStore()
+        yield* first.set('codex-work', oauth('work', 1))
+        yield* first.set('openai', apiKey('sk-1'))
+        const reopened = yield* Credentials.makeKeyValueStore()
+        expect(accessOf(yield* reopened.get('codex-work'))).toBe('work')
+        // A credential read back from the store is the one `update` expects.
+        yield* reopened.update('codex-work', oauth('work', 1), oauth('next', 2))
+        expect(accessOf(yield* first.get('codex-work'))).toBe('next')
+        expect(yield* first.list).toEqual([
+          { provider: 'codex-work', type: 'oauth' },
+          { provider: 'openai', type: 'api_key' },
+        ])
+      }).pipe(withKeyValue),
+    ))
+})
 
 describe('config store', () => {
   const env = ConfigProvider.fromEnvRecord({ ANTHROPIC_API_KEY: 'sk-env', GROQ_API_KEY: 'gk' })

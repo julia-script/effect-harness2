@@ -12,8 +12,17 @@
 import { Context, Effect, Layer } from 'effect'
 import type { Scope } from 'effect'
 import { implement } from './internal/runner.ts'
-import type { Runner } from './internal/runner.ts'
+import type * as runner from './internal/runner.ts'
 import type * as Tool from './Tool.ts'
+
+/** What running a call came to, with the tool's values encoded. */
+export type Outcome = runner.Outcome
+
+/**
+ * A tool with its handler behind a signature of encoded values, as the tool task runs it by name.
+ * Extensions wrap runners to decorate a tool another extension implements.
+ */
+export type Runner = runner.Runner
 
 /** What a handler gets besides the arguments. */
 export interface HandlerContext<Config> {
@@ -38,6 +47,9 @@ export interface Implementation<Name extends string> {
   readonly name: Name
   readonly implementation: unique symbol
 }
+
+/** What implementing the tools `Names` needs: their implementations, or nothing for no tools. */
+export type Requires<Name extends string> = [Name] extends [never] ? never : Implementation<Name>
 
 /** The tools of a list, by name. */
 export type ByName<Tools extends ReadonlyArray<Tool.Any>> = {

@@ -9,6 +9,7 @@ import { RpcClient } from 'effect/rpc'
 import type { RpcClientError } from 'effect/rpc/RpcClientError'
 import { SubmissionNotFound } from '../harness/HarnessError.ts'
 import type { ConversationBusy, InitFailed, InvalidSubmission } from '../harness/HarnessError.ts'
+import type * as AgentState from '../harness/AgentState.ts'
 import type { AbortResult, Draft, Settled } from '../harness/Submission.ts'
 import type { CommitError } from '../session/SessionError.ts'
 import type { ConversationOwnership } from '../storage/schema/Conversation.ts'
@@ -52,6 +53,10 @@ export interface Conversation {
   readonly reset: (handoff?: string) => Effect.Effect<Submission, Failure>
   /** Start a manual compaction; its summary is placed at the next boundary, or at once when idle. */
   readonly compact: (instructions?: string) => Effect.Effect<TaskId, Failure>
+  /** Change what the conversation asks with: a given field replaces it, `null` clears it. */
+  readonly configure: (change: AgentState.Change) => Effect.Effect<void, Failure>
+  /** The agent its next request would resolve, by name. */
+  readonly agent: Effect.Effect<AgentState.View, Failure>
   readonly entries: (
     query: ConversationEntryQuery,
     limit: number,
@@ -133,6 +138,8 @@ const conversationHandle = (rpcs: Rpcs, id: ConversationId): Conversation => ({
       conversationId: id,
       ...(instructions === undefined ? {} : { instructions }),
     }),
+  configure: (change) => rpcs.Configure({ conversationId: id, change }),
+  agent: rpcs.Agent({ conversationId: id }),
   entries: (query, limit, cursor) =>
     rpcs.Entries({ conversationId: id, query, limit, ...(cursor === undefined ? {} : { cursor }) }),
   fork: (at, { ownership, init }) =>

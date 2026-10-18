@@ -80,6 +80,10 @@ export const ThinkingLevel = Schema.Literals(['minimal', 'low', 'medium', 'high'
 export type ThinkingLevel = typeof ThinkingLevel.Type
 
 /** A thinking level, or `off`. */
+/** Which model to ask: `Model.Ref`, here so Schemas that name a model need no model runtime. */
+export const ModelRef = Schema.Struct({ provider: Schema.String, modelId: Schema.String })
+export type ModelRef = typeof ModelRef.Type
+
 export const ModelThinkingLevel = Schema.Union([Schema.Literal('off'), ThinkingLevel])
 export type ModelThinkingLevel = typeof ModelThinkingLevel.Type
 

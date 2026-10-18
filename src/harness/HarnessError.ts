@@ -44,3 +44,16 @@ export class InitFailed extends Schema.TaggedError<InitFailed, { readonly brand:
   init: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}
+
+/**
+ * An extension the registry refused, publishing nothing: two tools or sections of one name, a
+ * section key that is invalid or reserved, or a task name another extension or a built-in task
+ * already has.
+ */
+export class InvalidExtension extends Schema.TaggedError<
+  InvalidExtension,
+  { readonly brand: unique symbol }
+>('effect-harness/harness/HarnessError/InvalidExtension')('InvalidExtension', {
+  message: Schema.String,
+  extension: Schema.String,
+}) {}

@@ -75,7 +75,7 @@ export const appendInput = Effect.fnUntraced(function* (
   tx: Tx,
   conversationId: ConversationId,
   content: UserInput,
-  entry: InputEntry | undefined,
+  entry?: InputEntry,
 ) {
   const timestamp = yield* Clock.currentTimeMillis
   const model = [{ role: 'user', content: strictJson(content), timestamp }]

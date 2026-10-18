@@ -13,3 +13,6 @@ export * as Scheduler from './Scheduler.ts'
 
 /** Errors of the task runtime and the `Scheduler`. */
 export * as TaskError from './TaskError.ts'
+
+/** Hooks: typed questions a task asks, answered by extensions. */
+export * as Hook from './Hook.ts'

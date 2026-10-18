@@ -71,6 +71,16 @@ const bounded = (tool: Any, output: Content, isError: boolean): ToolResult.Resul
   }
 }
 
+/** A result a hook replaced, within the tool's limits again. */
+export const rebound = (tool: Any, result: ToolResult.Result): ToolResult.Result => {
+  const limited = bounded(tool, result.output, result.isError)
+  return {
+    ...result,
+    output: limited.output,
+    diagnostics: [...result.diagnostics, ...limited.diagnostics],
+  }
+}
+
 /** What an outcome means for the call. */
 const ranOf = (call: ToolCall, tool: Any, outcome: Outcome): Omit<Ran, 'durationMs'> => {
   if (outcome.type === 'success' || outcome.type === 'failure') {

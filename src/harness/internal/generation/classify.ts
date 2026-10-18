@@ -1,15 +1,19 @@
+/* oxlint-disable effecttsgo/any-unknown-in-error-context -- extension code may fail with anything; a failure is reported or answers the call */
 /**
  * What a response means for the run: poll it, retry, answer, start a tool round, or end the run.
  */
-import { Clock, Effect, Result } from 'effect'
+import { Clock, Effect, Option, Result } from 'effect'
 import type { AssistantMessage, Message } from '../../../model/Message.ts'
 import type * as Model from '../../../model/Model.ts'
 import { ContextOverflow, Retryable, UnknownModel } from '../../../model/ModelError.ts'
 import type { ModelError } from '../../../model/ModelError.ts'
 import * as Transcript from '../../../model/Transcript.ts'
 import type { EntryId, TaskId } from '../../../storage/schema/Ids.ts'
+import * as Hook from '../../../task/Hook.ts'
+import type { Hooks } from '../../Generation.ts'
 import * as Live from '../../Live.ts'
 import { compactionFor, retryDelayMs } from '../../Settings.ts'
+import type { UserInput } from '../../Submission.ts'
 import { selectCut } from '../compaction/select.ts'
 import { createCompaction } from '../compaction/status.ts'
 import { prepareBoundary } from '../inbox.ts'
@@ -30,6 +34,8 @@ export interface Request {
   readonly messages?: ReadonlyArray<Message>
   /** Set when the response came from polling, so a still deferred one polls strictly later. */
   readonly pollAt?: number
+  /** The generation hooks of the agent the phase resolved. */
+  readonly hooks: ReadonlyArray<Partial<Hooks>>
 }
 
 /**
@@ -64,21 +70,60 @@ export const failNoModel = (runtime: GenerationRuntime, ref: Model.Ref | undefin
       : `Model ${ref.provider}/${ref.modelId} is not available`,
   )
 
-/** A final answer: the final boundary places queued items, and the run's inputs settle `done`. */
-const answer = (runtime: GenerationRuntime, env: Env, message: AssistantMessage) =>
-  runtime.commit((tx) =>
-    Effect.gen(function* () {
-      const { conversationId } = runtime
-      // Queue modes are read on the line, when the boundary is decided.
-      const boundary = yield* prepareBoundary(tx, conversationId, yield* env.settings)
-      const entry = yield* appendAssistant(tx, conversationId, message)
-      yield* finishRun(tx, boundary, runtime.taskId, entry.id)
-      const next: Next = {
-        status: 'terminal',
-        outcome: { status: 'completed', result: { entryId: entry.id } },
-      }
-      return next
-    }),
+/** Ask `onYield` in order; the first continuation wins. */
+const onYield = (request: Request, message: AssistantMessage, api: Hook.Api) =>
+  Effect.gen(function* () {
+    for (const hook of request.hooks) {
+      if (hook.onYield === undefined) continue
+      const answered = yield* Hook.ask(hook.onYield(message, api), 'onYield')
+      if (Option.isSome(answered)) return Option.some(answered.value.continue)
+    }
+    return Option.none<UserInput>()
+  })
+
+/**
+ * A final answer: the final boundary places queued items, and the run's inputs settle `done`;
+ * or an `onYield` continuation continues the run with a fresh generation.
+ */
+const answer = (
+  runtime: GenerationRuntime,
+  env: Env,
+  request: Request,
+  message: AssistantMessage,
+) =>
+  Effect.gen(function* () {
+    const continuation = yield* onYield(request, message, runtime)
+    return yield* runtime.commit((tx) =>
+      Effect.gen(function* () {
+        const { conversationId } = runtime
+        // Queue modes are read on the line, when the boundary is decided.
+        const boundary = yield* prepareBoundary(tx, conversationId, yield* env.settings)
+        const entry = yield* appendAssistant(tx, conversationId, message)
+        yield* finishRun(
+          tx,
+          boundary,
+          runtime.taskId,
+          entry.id,
+          Option.getOrUndefined(continuation),
+        )
+        const next: Next = {
+          status: 'terminal',
+          outcome: { status: 'completed', result: { entryId: entry.id } },
+        }
+        return next
+      }),
+    )
+  })
+
+/** Show every response to `afterResponse`, before it is classified. */
+const afterResponse = (request: Request, message: AssistantMessage, api: Hook.Api) =>
+  Effect.forEach(
+    request.hooks,
+    (hook) =>
+      hook.afterResponse === undefined
+        ? Effect.void
+        : Effect.asVoid(Hook.ask(Effect.asVoid(hook.afterResponse(message, api)), 'afterResponse')),
+    { discard: true },
   )
 
 /** Poll a deferred response at `pollAfterMs`, and strictly after the previous poll. */
@@ -207,6 +252,9 @@ export const classify = (
   outcome: Result.Result<AssistantMessage, ModelError>,
 ) =>
   Effect.gen(function* () {
+    const response = Result.isSuccess(outcome) ? outcome.success : outcome.failure.response
+    if (response !== undefined && response.stopReason !== 'deferred')
+      yield* afterResponse(request, response, runtime)
     if (Result.isFailure(outcome)) return yield* failed(runtime, env, request, outcome.failure)
     const message = outcome.success
     const { stopReason } = message
@@ -216,7 +264,7 @@ export const classify = (
     if (stopReason === 'toolUse' && calls.length > 0)
       return yield* startToolRound(runtime, env, request, message, calls)
     if (stopReason === 'stop' || stopReason === 'length' || stopReason === 'toolUse')
-      return yield* answer(runtime, env, message)
+      return yield* answer(runtime, env, request, message)
     const text = message.errorMessage ?? `Model response ended with stop reason ${stopReason}`
     return yield* fail(runtime, 'model_error', text, message)
   })

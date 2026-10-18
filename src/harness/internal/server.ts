@@ -96,6 +96,8 @@ const conversations = (
   | 'Submit'
   | 'Reset'
   | 'Compact'
+  | 'Configure'
+  | 'Agent'
   | 'Entries'
   | 'AbortConversation'
   | 'WaitForIdle'
@@ -112,6 +114,10 @@ const conversations = (
     ),
   Compact: ({ conversationId, instructions }) =>
     withConversation(harness, conversationId, (conversation) => conversation.compact(instructions)),
+  Configure: ({ conversationId, change }) =>
+    withConversation(harness, conversationId, (conversation) => conversation.configure(change)),
+  Agent: ({ conversationId }) =>
+    withConversation(harness, conversationId, (conversation) => conversation.agent),
   Entries: ({ conversationId, query, limit, cursor }) =>
     withConversation(harness, conversationId, (conversation) =>
       conversation.entries(query, limit, cursor),

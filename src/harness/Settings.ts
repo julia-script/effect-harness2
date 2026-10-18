@@ -3,6 +3,7 @@
  * both read the `Current` settings, at every use, so a host can change them while it runs.
  */
 import { Context, Effect, Layer, Schema } from 'effect'
+import { ModelThinkingLevel } from '../model/Message.ts'
 import * as Model from '../model/Model.ts'
 
 /** How many queued items of one mode a boundary places: the first, or all of them. */
@@ -67,10 +68,16 @@ export const Settings = Schema.Struct({
   partialIntervalMs: Schema.Finite,
   /** Default: enabled, 16,384 reserved, 20,000 kept, background 32,768 below the threshold. */
   compaction: CompactionSettings,
+  /** The default extension selection, by name; absent, every installed extension. */
+  extensions: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** The model of a conversation whose `pi.agent` sets none; absent, such a run ends `no_model`. */
+  model: Schema.optionalKey(Model.Ref),
+  /** The reasoning level of a conversation whose `pi.agent` sets none. Default: `off`. */
+  reasoning: Schema.optionalKey(ModelThinkingLevel),
 })
 export type Settings = typeof Settings.Type
 
-/** Host settings: any field may be left to its default, `retry` field by field. */
+/** Host settings: any field may be left to its default, `retry` and `compaction` field by field. */
 export const Input = Schema.Struct({
   steeringMode: Schema.optionalKey(QueueMode),
   followUpMode: Schema.optionalKey(QueueMode),
@@ -91,6 +98,9 @@ export const Input = Schema.Struct({
       modelOverrides: Schema.optionalKey(Schema.Record(Schema.String, PartialCompaction)),
     }),
   ),
+  extensions: Schema.optionalKey(Schema.Array(Schema.String)),
+  model: Schema.optionalKey(Model.Ref),
+  reasoning: Schema.optionalKey(ModelThinkingLevel),
 })
 export type Input = typeof Input.Type
 
@@ -119,6 +129,9 @@ export const resolve = (input: Input = {}): Settings => ({
   stream: input.stream ?? defaults.stream,
   partialIntervalMs: input.partialIntervalMs ?? defaults.partialIntervalMs,
   compaction: { ...defaults.compaction, ...input.compaction },
+  ...(input.extensions === undefined ? {} : { extensions: input.extensions }),
+  ...(input.model === undefined ? {} : { model: input.model }),
+  ...(input.reasoning === undefined ? {} : { reasoning: input.reasoning }),
 })
 
 /** The compaction policy for `model`: its override over the harness-wide one, field by field. */

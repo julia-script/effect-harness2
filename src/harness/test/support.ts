@@ -17,6 +17,7 @@ import type { EntryRecord } from '../../storage/schema/Entry.ts'
 import type { ConversationId, EntryId } from '../../storage/schema/Ids.ts'
 import { Registry, Task } from '../../task/index.ts'
 import type { Conversation } from '../Conversation.ts'
+import * as Extensions from '../Extensions.ts'
 import * as Harness from '../Harness.ts'
 import * as Inbox from '../Inbox.ts'
 import * as Live from '../Live.ts'
@@ -102,7 +103,11 @@ export const open = (
     const steps = yield* Queue.unbounded<Step>()
     const settings = Settings.make(options.settings ?? {})
     const registry = yield* Registry.make([standIn(steps, settings), ...tasks])
+    const extensions = yield* Extensions.make.pipe(
+      Effect.provideService(Registry.Registry, registry),
+    )
     const harness = yield* Harness.makeWith(options).pipe(
+      Effect.provideService(Extensions.Extensions, extensions),
       Effect.provideService(Storage, storage),
       Effect.provideService(Registry.Registry, registry),
       Effect.provideService(Settings.Current, settings),

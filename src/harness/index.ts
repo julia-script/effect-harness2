@@ -41,3 +41,15 @@ export * as Settings from './Settings.ts'
 
 /** Errors a `Harness` reports. */
 export * as HarnessError from './HarnessError.ts'
+
+/** Extensions: tools, sections, hooks, wrappers and tasks, selected per conversation. */
+export * as Extension from './Extension.ts'
+
+/** The registry of installed extensions. */
+export * as Extensions from './Extensions.ts'
+
+/** The built-in `pi.agent` document, and the agent resolved from it. */
+export * as Agent from './Agent.ts'
+
+/** What an agent is made of, as Schemas the client shares. */
+export * as AgentState from './AgentState.ts'

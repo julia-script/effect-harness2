@@ -27,6 +27,12 @@ export * as Generation from './Generation.ts'
 /** Errors of the generation task. */
 export * as GenerationError from './GenerationError.ts'
 
+/** The built-in compaction task: summaries that start the context anew. */
+export * as Compaction from './Compaction.ts'
+
+/** The built-in `pi.usage` document: a conversation's spend. */
+export * as Usage from './Usage.ts'
+
 /** The built-in `pi.live` document. */
 export * as Live from './Live.ts'
 

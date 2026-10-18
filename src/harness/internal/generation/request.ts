@@ -75,7 +75,7 @@ type Phase<P extends Checkpoint['phase']> = {
  */
 export const requestPhase = (env: Env) => (task: Phase<'request'>, runtime: GenerationRuntime) =>
   Effect.gen(function* () {
-    const { attempt, model: ref, options, cutoff } = task.state.checkpoint
+    const { attempt, compacted, model: ref, options, cutoff } = task.state.checkpoint
     const { conversationId } = runtime
     yield* runtime.commit((tx) =>
       Effect.gen(function* () {
@@ -93,16 +93,21 @@ export const requestPhase = (env: Env) => (task: Phase<'request'>, runtime: Gene
       options: { ...options, sessionId: String(conversationId) },
     }
     const outcome = yield* Effect.result(streamResponse(runtime, env, request, info, attempt))
-    return yield* classify(runtime, env, { attempt, model: ref, cutoff, messages }, outcome)
+    return yield* classify(
+      runtime,
+      env,
+      { attempt, compacted, model: ref, cutoff, messages },
+      outcome,
+    )
   })
 
 /** The `poll` phase: fetch a deferred response at its time, and classify it. */
 export const pollPhase = (env: Env) => (task: Phase<'poll'>, runtime: GenerationRuntime) =>
   Effect.gen(function* () {
-    const { attempt, model: ref, cutoff, handle, pollAt } = task.state.checkpoint
+    const { attempt, compacted, model: ref, cutoff, handle, pollAt } = task.state.checkpoint
     if (env.model.info(ref) === undefined) return yield* failNoModel(runtime, ref)
     yield* sleepUntil(pollAt)
     const outcome = yield* Effect.result(env.model.poll(ref, handle))
-    const request = { attempt, model: ref, cutoff, pollAt }
+    const request = { attempt, compacted, model: ref, cutoff, pollAt }
     return yield* classify(runtime, env, request, outcome)
   })

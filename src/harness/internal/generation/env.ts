@@ -20,9 +20,9 @@ export type GenerationRuntime = Runtime<Record<string, never>, Checkpoint, Resul
 export type Next = NextState<Checkpoint, Result>
 
 /** The committed context, now or cut off at `at`, read in a commit of its own. */
-export const readView = (runtime: GenerationRuntime, at?: EntryId) =>
+export const readView = <I, S, R>(runtime: Runtime<I, S, R>, at?: EntryId) =>
   Effect.suspend(() => {
-    let view: View = { head: undefined, entries: [], messages: [] }
+    let view: View = { head: undefined, entries: [], contributions: [], messages: [] }
     return runtime
       .commit((tx) =>
         Effect.map(read(tx, runtime.conversationId, at), (current) => {

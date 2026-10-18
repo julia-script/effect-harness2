@@ -38,12 +38,43 @@ export const ToolSlot = Schema.Struct({
 })
 export type ToolSlot = typeof ToolSlot.Type
 
+/** Why a compaction runs: `compact()`, a threshold in preparation, or a context overflow. */
+export const CompactionReason = Schema.Literals(['manual', 'threshold', 'overflow'])
+export type CompactionReason = typeof CompactionReason.Type
+
+/** One live compaction task. */
+export const CompactionStatus = Schema.Struct({
+  taskId: TaskId,
+  reason: CompactionReason,
+  /** Whether a generation waits for it: one the generation owns. */
+  blocking: Schema.Boolean,
+  attempt: Schema.Finite,
+  /** Durable backoff before the next summarization attempt. */
+  retry: Schema.optionalKey(Schema.Struct({ at: Schema.Finite, error: Schema.String })),
+})
+export type CompactionStatus = typeof CompactionStatus.Type
+
+/** The newest compaction that failed since one last produced a summary. */
+export const CompactionFailure = Schema.Struct({
+  taskId: TaskId,
+  reason: CompactionReason,
+  error: Schema.String,
+})
+export type CompactionFailure = typeof CompactionFailure.Type
+
 export const State = Schema.Struct({
   /** Present exactly while the conversation is busy. */
   run: Schema.optionalKey(Run),
   generation: Schema.optionalKey(Generation),
   /** The current tool round in call order, from the tool-calling answer until the round ends. */
   tools: Schema.optionalKey(Schema.Array(ToolSlot)),
+  /** Live compaction tasks in task ID order; absent when none. */
+  compactions: Schema.optionalKey(Schema.Array(CompactionStatus)),
+  /**
+   * The newest compaction failure, kept after its task ended. A compaction that produces a summary
+   * removes it; one that is aborted or finds nothing to compact leaves it.
+   */
+  compactionFailure: Schema.optionalKey(CompactionFailure),
 })
 export type State = typeof State.Type
 

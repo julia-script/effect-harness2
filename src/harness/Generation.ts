@@ -15,6 +15,9 @@
  *   `pi.tool` task the generation owns, all at once or one after another (`toolExecution`); a call
  *   to a tool the request did not offer is answered `tool_unavailable` at once. `tools` waits for
  *   them, then passes the `postTools` boundary and hands the run to a fresh generation.
+ * - Compaction (see `Compaction`): preparation compacts first above the blocking threshold, starts
+ *   a background compaction above the background one, and a `ContextOverflow` failure compacts and
+ *   prepares again, once per generation.
  * - Abort answers calls not started yet with `aborted`, cancels a deferred response, and ends the
  *   run `unanswered` with `aborted`.
  *
@@ -30,6 +33,7 @@ import * as Task from '../task/Task.ts'
 import type * as Tool from '../tool/Tool.ts'
 import type * as Toolkit from '../tool/Toolkit.ts'
 import * as ToolTask from '../tool/ToolTask.ts'
+import * as Compaction from './Compaction.ts'
 import * as internal from './internal/generation/task.ts'
 import type * as prompt from './internal/prompt.ts'
 import { RUN_KIND, toolHooks } from './internal/run.ts'
@@ -38,10 +42,21 @@ import * as Settings from './Settings.ts'
 /** The task kind. */
 export const name = RUN_KIND
 
-const attempt = { attempt: Schema.Finite }
+const attempt = {
+  attempt: Schema.Finite,
+  /** The blocking compaction this generation waited for; it starts no other. */
+  compacted: Schema.optionalKey(TaskId),
+}
 
 export const Checkpoint = Schema.Union([
-  Schema.Struct({ phase: Schema.Literal('prepare'), ...attempt }),
+  Schema.Struct({
+    phase: Schema.Literal('prepare'),
+    ...attempt,
+    /** The overflow that started `compacted`; checked once when `prepare` resumes. */
+    overflow: Schema.optionalKey(Schema.String),
+    /** Set when the blocking threshold started `compacted`; checked once when it resumes. */
+    threshold: Schema.optionalKey(Schema.Literal(true)),
+  }),
   /** The request preparation fixed; a resend after recovery uses it unchanged. */
   Schema.Struct({
     phase: Schema.Literal('request'),
@@ -96,7 +111,8 @@ export interface Agent {
 
 /**
  * The generation task, over the `Model` in context and `Settings.Current`. It offers the agent's
- * tools; their calls need a tool task, which `tasks` and `layer` install with it.
+ * tools; their calls need the tool task, and compacting needs the compaction task, which `tasks`
+ * and `layer` install with it.
  */
 export const make = (
   agent: Agent | Effect.Effect<Agent>,
@@ -114,7 +130,7 @@ export interface Options<Tools extends Record<string, Tool.Any>> {
   readonly config?: ToolTask.Config<Tools>
 }
 
-/** The generation task and the tool task over `toolkit` and its `implementations`. */
+/** The generation, tool and compaction tasks, over `toolkit` and its `implementations`. */
 export const tasks = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.Toolkit<Tools>,
   implementations: Context.Context<Toolkit.Implementation<Toolkit.Names<Tools>>>,
@@ -131,11 +147,12 @@ export const tasks = <Tools extends Record<string, Tool.Any>>(
     return [
       yield* make(agent),
       ToolTask.make(toolkit, implementations, { ...config, hooks: toolHooks }),
+      yield* Compaction.make(agent),
     ]
   })
 
 /**
- * Install the generation and tool tasks in the `Registry`, over the `Model` and the handlers
+ * Install the generation, tool and compaction tasks in the `Registry`, over the `Model` and the handlers
  * `toolkit.toLayer()` provides.
  */
 export const layer = <Tools extends Record<string, Tool.Any>>(

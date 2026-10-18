@@ -32,13 +32,15 @@ export interface View {
   readonly head: HeadMarker | undefined
   /** Active entries, oldest first. */
   readonly entries: ReadonlyArray<EntryRecord>
+  /** Each active entry's messages after its edit, before tool result ordering. */
+  readonly contributions: ReadonlyArray<ReadonlyArray<Message>>
   readonly messages: ReadonlyArray<Message>
 }
 
 const decodeMessage = Schema.decodeUnknownOption(Message)
 
 /** The messages of `model` that decode; a message of another shape contributes nothing. */
-const decodeAll = (model: ReadonlyArray<ModelMessage>): ReadonlyArray<Message> =>
+export const decodeAll = (model: ReadonlyArray<ModelMessage>): ReadonlyArray<Message> =>
   model.flatMap((message) => Option.toArray(decodeMessage(message)))
 
 /** Every entry of `query`, oldest first. */
@@ -83,7 +85,7 @@ export const read = (tx: Tx, conversationId: ConversationId, at?: EntryId) =>
   Effect.gen(function* () {
     const tail = at ?? (yield* tx.scanEntries({ conversationId }, 1)).items[0]?.id
     if (tail === undefined) {
-      const empty: View = { head: undefined, entries: [], messages: [] }
+      const empty: View = { head: undefined, entries: [], contributions: [], messages: [] }
       return empty
     }
     const head = yield* headAt(tx, conversationId, tail)
@@ -100,9 +102,10 @@ export const derive = (head: HeadMarker | undefined, range: ReadonlyArray<EntryR
   const entries =
     head === undefined ? range : [head, ...range.filter((entry) => entry.head === undefined)]
   const own = new Map(entries.map((entry) => [entry.id, decodeAll(entry.model ?? [])]))
-  const contributed = entries.flatMap((entry) => contribute(edits.get(entry.id), own.get(entry.id)))
+  const contributions = entries.map((entry) => contribute(edits.get(entry.id), own.get(entry.id)))
   const baseline = findBaseline(head, entries, own)
-  return { head, entries, messages: leadWithSystem(orderToolResults(contributed), baseline) }
+  const messages = leadWithSystem(orderToolResults(contributions.flat()), baseline)
+  return { head, entries, contributions, messages }
 }
 
 /** One active entry's messages after its edit, without excluded stop reasons. */

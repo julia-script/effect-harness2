@@ -11,6 +11,8 @@ import type { TaskRecord } from '../../storage/schema/Task.ts'
 import type { SchedulerOutcome } from '../../task/Scheduler.ts'
 import * as ToolTask from '../../tool/ToolTask.ts'
 import * as Live from '../Live.ts'
+import * as Usage from '../Usage.ts'
+import { COMPACTION_KIND, failStatus } from './compaction/status.ts'
 import { applyBoundary } from './inbox.ts'
 import type { Boundary } from './inbox.ts'
 import { strictJson } from './json.ts'
@@ -59,12 +61,23 @@ export const endRun = Effect.fnUntraced(function* (
   delete live.run
 })
 
-/** Append a model response as a `pi.assistant` entry. */
-export const appendAssistant = (
+/**
+ * Append a model response as a `pi.assistant` entry, and add its usage to `pi.usage`.
+ * REMINDER: every built-in writer of assistant entries goes through here, so the ledger stays
+ * complete.
+ */
+export const appendAssistant = Effect.fnUntraced(function* (
   tx: Tx,
   conversationId: ConversationId,
   message: AssistantMessage,
-) => tx.appendEntry(conversationId, { kind: ASSISTANT_KIND, model: [strictJson({ ...message })] })
+) {
+  const key = `${message.provider}/${message.model}`
+  yield* Usage.record(tx, conversationId, 'models', key, message.usage)
+  return yield* tx.appendEntry(conversationId, {
+    kind: ASSISTANT_KIND,
+    model: [strictJson({ ...message })],
+  })
+})
 
 /**
  * Append the committed partial an interrupted, aborted, faulted or orphaned attempt left, as an
@@ -156,8 +169,8 @@ export const continueRun = Effect.fnUntraced(function* (
 /**
  * Cleanup for an outcome the scheduler writes itself (spec §5.4): a faulted or orphaned run task
  * ends its run `unanswered`, keeping its partial as an aborted entry; a tool task's slot is done
- * without an entry, and context derivation synthesizes the missing result. Other kinds are left
- * alone, so it never creates `pi.live` elsewhere.
+ * without an entry, and context derivation synthesizes the missing result; a compaction's status
+ * is removed and its failure recorded. Other kinds are left alone, so it never creates `pi.live` elsewhere.
  */
 export const settleOutcome = Effect.fnUntraced(function* (
   tx: Tx,
@@ -167,6 +180,11 @@ export const settleOutcome = Effect.fnUntraced(function* (
   if (record.kind === ToolTask.name) {
     const slot = slotOf(yield* tx.doc(Live.document, record.conversationId), record.id)
     if (slot !== undefined) slot.status = 'done'
+    return
+  }
+  if (record.kind === COMPACTION_KIND) {
+    const error = outcome.status === 'faulted' ? outcome.error.message : outcome.reason
+    failStatus(yield* tx.doc(Live.document, record.conversationId), record.id, error)
     return
   }
   if (record.kind !== RUN_KIND) return

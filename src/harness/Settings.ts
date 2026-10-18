@@ -24,6 +24,33 @@ export const Retry = Schema.Struct({
 })
 export type Retry = typeof Retry.Type
 
+/** Automatic compaction thresholds; manual compaction ignores `enabled`. */
+export const Compaction = Schema.Struct({
+  /** Threshold and overflow compaction. */
+  enabled: Schema.Boolean,
+  /** Room kept for the answer: a generation compacts first above `contextWindow - reserveTokens`. */
+  reserveTokens: Schema.Finite,
+  /** About how much recent context a summary keeps verbatim. */
+  keepRecentTokens: Schema.Finite,
+  /** Background compaction starts this far below the blocking threshold; `0` disables it. */
+  backgroundTokens: Schema.Finite,
+})
+export type Compaction = typeof Compaction.Type
+
+const PartialCompaction = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  reserveTokens: Schema.optionalKey(Schema.Finite),
+  keepRecentTokens: Schema.optionalKey(Schema.Finite),
+  backgroundTokens: Schema.optionalKey(Schema.Finite),
+})
+
+/** Harness-wide compaction, with overrides keyed by exact `provider/modelId`. */
+export const CompactionSettings = Schema.Struct({
+  ...Compaction.fields,
+  modelOverrides: Schema.Record(Schema.String, PartialCompaction),
+})
+export type CompactionSettings = typeof CompactionSettings.Type
+
 /** Resolved settings: every field set. */
 export const Settings = Schema.Struct({
   /** Steers a boundary places. Default: `one-at-a-time`. */
@@ -38,6 +65,8 @@ export const Settings = Schema.Struct({
   stream: Model.Options,
   /** Minimum pause between commits of the answer being generated. Default: 100 ms. */
   partialIntervalMs: Schema.Finite,
+  /** Default: enabled, 16,384 reserved, 20,000 kept, background 32,768 below the threshold. */
+  compaction: CompactionSettings,
 })
 export type Settings = typeof Settings.Type
 
@@ -56,6 +85,12 @@ export const Input = Schema.Struct({
   ),
   stream: Schema.optionalKey(Model.Options),
   partialIntervalMs: Schema.optionalKey(Schema.Finite),
+  compaction: Schema.optionalKey(
+    Schema.Struct({
+      ...PartialCompaction.fields,
+      modelOverrides: Schema.optionalKey(Schema.Record(Schema.String, PartialCompaction)),
+    }),
+  ),
 })
 export type Input = typeof Input.Type
 
@@ -66,6 +101,13 @@ export const defaults: Settings = {
   retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000, maxDelayMs: 60_000 },
   stream: {},
   partialIntervalMs: 100,
+  compaction: {
+    enabled: true,
+    reserveTokens: 16_384,
+    keepRecentTokens: 20_000,
+    backgroundTokens: 32_768,
+    modelOverrides: {},
+  },
 }
 
 /** Every field of `input` over its default. */
@@ -76,7 +118,19 @@ export const resolve = (input: Input = {}): Settings => ({
   retry: { ...defaults.retry, ...input.retry },
   stream: input.stream ?? defaults.stream,
   partialIntervalMs: input.partialIntervalMs ?? defaults.partialIntervalMs,
+  compaction: { ...defaults.compaction, ...input.compaction },
 })
+
+/** The compaction policy for `model`: its override over the harness-wide one, field by field. */
+export const compactionFor = (
+  settings: Settings,
+  model: { readonly provider: string; readonly modelId: string },
+): Compaction => {
+  const { modelOverrides, ...policy } = settings.compaction
+  const key = `${model.provider}/${model.modelId}`
+  const override = Object.hasOwn(modelOverrides, key) ? modelOverrides[key] : undefined
+  return { ...policy, ...override }
+}
 
 /** The delay before retry `attempt`, counted from 1. */
 export const retryDelayMs = (retry: Retry, attempt: number): number =>

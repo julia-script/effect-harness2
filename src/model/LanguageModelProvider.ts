@@ -13,7 +13,7 @@ import type { Definition, Info, Provider, Request } from './Model.ts'
 import { define } from './Model.ts'
 import type { ModelError } from './ModelError.ts'
 
-export interface Options {
+export interface Options<R = never> {
   /** The provider name requests route by, such as `anthropic`. */
   readonly name: string
   /** The API its responses name, such as `anthropic-messages`. */
@@ -26,10 +26,11 @@ export interface Options {
   readonly languageModel: (
     model: Info,
     request: Request,
-  ) => Effect.Effect<LanguageModel.LanguageModel, ModelError, Scope.Scope>
+  ) => Effect.Effect<LanguageModel.LanguageModel, ModelError, R | Scope.Scope>
 }
 
-export const make = (options: Options): Provider => ({
+/** A provider that needs what `languageModel` needs. */
+export const make = <R = never>(options: Options<R>): Provider<Exclude<R, Scope.Scope>> => ({
   name: options.name,
   models: options.models.map((definition) => define(options.name, options.api, definition)),
   stream: (request, model) =>

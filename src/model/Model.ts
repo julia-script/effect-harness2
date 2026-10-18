@@ -126,18 +126,22 @@ export const Event = Schema.Union([
 ])
 export type Event = typeof Event.Type
 
-/** What a backend implements to answer requests for its models. */
-export interface Provider {
+/**
+ * What a backend implements to answer requests for its models: a plain value. `R` is what it
+ * needs to answer, such as an `HttpClient` or `Credentials`; the `Model` layer over it needs the
+ * same.
+ */
+export interface Provider<out R = never> {
   readonly name: string
   readonly models: ReadonlyArray<Info>
-  readonly stream: (request: Request, model: Info) => Stream.Stream<Event, ModelError>
+  readonly stream: (request: Request, model: Info) => Stream.Stream<Event, ModelError, R>
   /** Fetch a deferred response; it may still be deferred. */
   readonly poll?: (
     handle: DeferredHandle,
     model: Info,
-  ) => Effect.Effect<AssistantMessage, ModelError>
+  ) => Effect.Effect<AssistantMessage, ModelError, R>
   /** Cancel a deferred response, best effort. */
-  readonly cancel?: (handle: DeferredHandle, model: Info) => Effect.Effect<void, ModelError>
+  readonly cancel?: (handle: DeferredHandle, model: Info) => Effect.Effect<void, ModelError, R>
 }
 
 export interface Service {
@@ -153,16 +157,18 @@ export interface Service {
 
 export class Model extends Context.Service<Model, Service>()('effect-harness/model/Model') {}
 
-/** A `Model` over `providers`; a later provider of the same name replaces an earlier one. */
-export const make = (providers: Iterable<Provider>): Service => route.make(providers)
+/**
+ * A `Model` over `providers`, answering with what they need from this context; a later provider of
+ * the same name replaces an earlier one.
+ */
+export const make = <R = never>(
+  providers: Iterable<Provider<R>>,
+): Effect.Effect<Service, never, R> =>
+  Effect.map(Effect.context<R>(), (context) => route.make(providers, context))
 
-export const layer = (providers: Iterable<Provider>): Layer.Layer<Model> =>
-  Layer.succeed(Model, make(providers))
-
-/** `layer`, over providers that need services of their own to build. */
-export const layerEffect = <E, R>(
-  providers: ReadonlyArray<Effect.Effect<Provider, E, R>>,
-): Layer.Layer<Model, E, R> => Layer.effect(Model, Effect.map(Effect.all(providers), make))
+/** A `Model` over `providers`; it needs what they need. */
+export const layer = <R = never>(providers: Iterable<Provider<R>>): Layer.Layer<Model, never, R> =>
+  Layer.effect(Model, make(providers))
 
 /**
  * The response after each event: partials while it streams (`pending`), then the final message.

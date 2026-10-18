@@ -16,7 +16,7 @@ const user = (content: string): Message.Message => ({ role: 'user', content, tim
 const setup = (options: Faux.Options = {}) =>
   Effect.gen(function* () {
     const faux = yield* Faux.make(options)
-    const model = Model.make([faux.provider])
+    const model = yield* Model.make([faux.provider])
     const request = (
       messages: ReadonlyArray<Message.Message>,
       requestOptions: Model.Options = {},
@@ -79,7 +79,7 @@ describe('Model over Faux', () => {
         const first = yield* Faux.make({ provider: 'a', models: [{ id: 'm1' }] })
         const second = yield* Faux.make({ provider: 'b', models: [{ id: 'm2' }, { id: 'm3' }] })
         const replaced = yield* Faux.make({ provider: 'a', models: [{ id: 'm4' }] })
-        const model = Model.make([first.provider, second.provider, replaced.provider])
+        const model = yield* Model.make([first.provider, second.provider, replaced.provider])
         expect(model.models.map(({ provider, id }) => `${provider}/${id}`)).toEqual([
           'a/m4',
           'b/m2',
@@ -188,7 +188,7 @@ describe('Model over Faux', () => {
       Effect.gen(function* () {
         const { faux } = yield* setup()
         const { poll: _poll, cancel: _cancel, ...plain } = faux.provider
-        const model = Model.make([plain])
+        const model = yield* Model.make([plain])
         const handle = { provider: 'faux', modelId: 'faux-1', api: 'faux', id: 'x' }
         yield* model.cancel(faux.ref(), handle)
         const error = yield* Effect.flip(model.poll(faux.ref(), handle))

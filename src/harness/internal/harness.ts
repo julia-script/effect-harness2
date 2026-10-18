@@ -6,6 +6,8 @@ import type { Cursor } from '../../storage/schema/Scan.ts'
 import type { SubmissionRecord } from '../../storage/schema/Submission.ts'
 import { Storage } from '../../storage/Storage.ts'
 import * as Scheduler from '../../task/Scheduler.ts'
+import * as Agent from '../Agent.ts'
+import { Extensions } from '../Extensions.ts'
 import type { Options, Service } from '../Harness.ts'
 import * as Inbox from '../Inbox.ts'
 import * as Live from '../Live.ts'
@@ -28,6 +30,7 @@ const sessionOptions = (options: Options): Session.Options => ({
     Effect.gen(function* () {
       yield* tx.doc(Live.document, record.id)
       yield* tx.doc(Inbox.document, record.id)
+      yield* Agent.created(tx, record)
       if (options.conversationCreated !== undefined) yield* options.conversationCreated(tx, record)
     }),
 })
@@ -61,7 +64,14 @@ export const make = Effect.fnUntraced(function* (options: Options) {
     Effect.provideService(Session.Session, session),
   )
   const submissions = yield* Submissions.make(session, yield* Settings.Current)
-  const host: Host = { session, scheduler, submissions }
+  const extensions = yield* Extensions
+  const host: Host = {
+    session,
+    scheduler,
+    submissions,
+    extensions,
+    settings: yield* Settings.Current,
+  }
   const service: Service = {
     session,
     scheduler,

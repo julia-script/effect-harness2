@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { Effect, Fiber, Layer, Queue, Schema } from 'effect'
-import { HarnessServer, Initializer } from '../../harness/index.ts'
+import { Extensions, HarnessServer, Initializer } from '../../harness/index.ts'
 import type { Step } from '../../harness/test/support.ts'
 import { standIn } from '../../harness/test/support.ts'
 import * as Settings from '../../harness/Settings.ts'
@@ -47,6 +47,29 @@ for (const [name, transport] of transports) {
           expect(settled).toMatchObject({ id: submission.id, type: 'input', status: 'done' })
           expect(yield* kinds(root)).toEqual(['pi.user', 'pi.assistant'])
           expect(yield* submission.status).toEqual(settled)
+        }),
+      ))
+
+    test('configures a conversation and reads its agent', () =>
+      runTest((storage) =>
+        Effect.gen(function* () {
+          const { client } = yield* open(storage, {}, transport)
+          const root = yield* client.root()
+          yield* root.configure({
+            model: { provider: 'faux', modelId: 'faux-1' },
+            reasoning: 'high',
+            instructions: 'Be brief.',
+          })
+          expect(yield* root.agent).toEqual({
+            model: { provider: 'faux', modelId: 'faux-1' },
+            reasoning: 'high',
+            extensions: [],
+            tools: [],
+            sections: ['instructions'],
+            instructions: 'Be brief.',
+          })
+          yield* root.configure({ reasoning: null })
+          expect((yield* root.agent).reasoning).toBe('off')
         }),
       ))
 
@@ -151,6 +174,7 @@ describe('client', () => {
       Effect.gen(function* () {
         const steps = yield* Queue.unbounded<Step>()
         const loop = HarnessServer.layerWith({}).pipe(
+          Layer.provide(Extensions.layer),
           Layer.provide(Layer.succeed(Storage, storage)),
           Layer.provide(Registry.layer([standIn(steps, Effect.succeed(Settings.defaults))])),
         )

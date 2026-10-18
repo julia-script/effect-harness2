@@ -4,12 +4,13 @@
  */
 import type { Effect } from 'effect'
 import type { ConversationOwnership, TransactionScope, Tx } from '../session/Session.ts'
-import type { CommitError } from '../session/SessionError.ts'
+import type { CommitError, SnapshotError } from '../session/SessionError.ts'
 import type { EntryRecord } from '../storage/schema/Entry.ts'
 import type { ConversationId, EntryId, TaskId } from '../storage/schema/Ids.ts'
 import type { Cursor, EntryQuery, Page } from '../storage/schema/Scan.ts'
 import type { StorageError } from '../storage/StorageError.ts'
 import type { SchedulerClosed, TaskNotFound } from '../task/TaskError.ts'
+import type * as AgentState from './AgentState.ts'
 import type { ConversationBusy, InvalidSubmission } from './HarnessError.ts'
 import type { Draft, Submission } from './Submission.ts'
 
@@ -62,6 +63,13 @@ export interface Conversation {
    * the next boundary.
    */
   readonly compact: (instructions?: string) => Effect.Effect<TaskId, CommitError>
+  /**
+   * Change what the conversation asks with, in its `pi.agent`: a given field replaces the stored
+   * one, `null` clears it. Its next request resolves the change.
+   */
+  readonly configure: (change: AgentState.Change) => Effect.Effect<void, CommitError>
+  /** The agent the conversation's next request would resolve, by name. */
+  readonly agent: Effect.Effect<AgentState.View, SnapshotError>
   /** A Session commit whose `tx.createTask()` defaults to this conversation. */
   readonly commit: <A, E, R>(
     change: (tx: Tx) => Effect.Effect<A, E, R>,

@@ -4,7 +4,7 @@
  */
 import { Effect, Layer, Queue } from 'effect'
 import type { Context, Scope } from 'effect'
-import { HarnessServer } from '../../harness/index.ts'
+import { Extensions, HarnessServer } from '../../harness/index.ts'
 import type { Step } from '../../harness/test/support.ts'
 import { standIn } from '../../harness/test/support.ts'
 import * as Settings from '../../harness/Settings.ts'
@@ -32,6 +32,7 @@ export const open = (
     const steps = yield* Queue.unbounded<Step>()
     const settings = Effect.succeed(Settings.defaults)
     const loop = HarnessServer.layerWith(options).pipe(
+      Layer.provide(Extensions.layer),
       Layer.provide(Layer.succeed(Storage, storage)),
       Layer.provide(Registry.layer([standIn(steps, settings)])),
     )

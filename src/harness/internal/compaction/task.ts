@@ -1,7 +1,8 @@
+/* oxlint-disable effecttsgo/any-unknown-in-error-context -- extension code may fail with anything; a failure is reported or answers the call */
 /**
  * The compaction task: its phases and abort handler.
  */
-import { Clock, Effect, Result } from 'effect'
+import { Clock, Effect, Option, Result } from 'effect'
 import type { Draft } from '../../../delta/Tracker.ts'
 import type { AssistantMessage, Message } from '../../../model/Message.ts'
 import * as Model from '../../../model/Model.ts'
@@ -10,14 +11,15 @@ import type { ModelError } from '../../../model/ModelError.ts'
 import type { Tx } from '../../../session/Session.ts'
 import type { EntryId } from '../../../storage/schema/Ids.ts'
 import type { Definition, NextState, Runtime, RunningTask } from '../../../task/Task.ts'
-import type { Checkpoint, Input, Result as CompactionResult } from '../../Compaction.ts'
+import type { Checkpoint, Input, Pending, Result as CompactionResult } from '../../Compaction.ts'
 import * as Live from '../../Live.ts'
 import { compactionFor, retryDelayMs } from '../../Settings.ts'
 import type { Settings } from '../../Settings.ts'
 import * as Usage from '../../Usage.ts'
 import { admit } from '../admission.ts'
-import { readView, sleepUntil } from '../generation/env.ts'
+import { agentOf, readView, sleepUntil } from '../generation/env.ts'
 import type { Env } from '../generation/env.ts'
+import { beforeCompact, fixRequest } from './request.ts'
 import { selectCut, summarizedMessages } from './select.ts'
 import { COMPACTION_KIND, failStatus, removeStatus, statusOf } from './status.ts'
 import * as Summary from './summary.ts'
@@ -54,38 +56,49 @@ const complete = (runtime: CompactionRuntime) =>
     }),
   )
 
-/** The `select` phase: choose the range to summarize, and fix the summarization request. */
-const selectPhase = (env: Env) => (_task: Phase<'select'>, runtime: CompactionRuntime) =>
+/**
+ * The `select` phase: choose the range to summarize, ask `beforeCompact`, and fix the
+ * summarization request, or complete or place a summary a hook decided.
+ */
+const selectPhase = (env: Env) => (task: Phase<'select'>, runtime: CompactionRuntime) =>
   Effect.gen(function* () {
-    const agent = yield* env.agent
+    const agent = yield* agentOf(env, runtime)
     const ref = agent.model
     const info = ref === undefined ? undefined : env.model.info(ref)
     if (ref === undefined || info === undefined) return yield* failNoModel(runtime, ref)
-    const settings = yield* env.settings
-    const policy = compactionFor(settings, ref)
+    const policy = compactionFor(yield* env.settings, ref)
     const view = yield* readView(runtime)
     const cut = selectCut(view, policy.keepRecentTokens)
     const firstKept = cut === undefined ? undefined : view.entries[cut]?.id
-    if (firstKept === undefined) return yield* complete(runtime)
-    // A deferred summary would leave the generation waiting on a batch.
-    const { deferred: _deferred, ...stream } = settings.stream
-    const reasoning = agent.reasoning ?? 'off'
-    const maxTokens = Math.min(
-      Math.floor(0.8 * policy.reserveTokens),
-      info.maxTokens > 0 ? info.maxTokens : Number.POSITIVE_INFINITY,
-    )
-    const options = {
-      ...stream,
-      cacheRetention: 'none' as const,
-      maxTokens,
-      ...(reasoning === 'off' ? {} : { reasoning }),
+    if (cut === undefined || firstKept === undefined) return yield* complete(runtime)
+    const { reason, instructions } = task.input
+    const pending: Pending = {
+      reason,
+      entries: view.entries.slice(0, cut),
+      messages: summarizedMessages(view, cut),
+      firstKept,
+      ...(instructions === undefined ? {} : { instructions }),
     }
-    const tail = view.entries.reduce((max, entry) => (entry.id > max ? entry.id : max), firstKept)
-    const request: Request = { attempt: 1, model: ref, options, tail, firstKept }
+    const decision = yield* beforeCompact(agent, pending, runtime)
+    if (Option.isSome(decision))
+      return yield* 'decline' in decision.value
+        ? complete(runtime)
+        : place(env, runtime, firstKept, decision.value.summary)
+    const request = yield* fixRequest(env, agent, info, view, firstKept)
     return yield* runtime.commit((): Effect.Effect<Next> =>
       Effect.succeed({ status: 'running', checkpoint: { phase: 'summarize', ...request } }),
     )
   })
+
+/** Place a summary a hook supplied, in a commit of its own. */
+const place = (env: Env, runtime: CompactionRuntime, firstKept: EntryId, summary: string) =>
+  Effect.flatMap(env.settings, (settings) =>
+    runtime.commit((tx, current) =>
+      Effect.flatMap(tx.doc(Live.document, runtime.conversationId), (live) =>
+        placeSummary(tx, runtime, current, live, firstKept, summary, settings),
+      ),
+    ),
+  )
 
 /**
  * Place the summary and complete. A blocking compaction, owned by its generation, appends it: the

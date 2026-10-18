@@ -10,6 +10,7 @@ import type { Storage } from '../storage/Storage.ts'
 import type { Registry } from '../task/Registry.ts'
 import type { Scheduler } from '../task/Scheduler.ts'
 import { HarnessRpcs } from '../client/HarnessRpcs.ts'
+import type { Extensions } from './Extensions.ts'
 import * as Harness from './Harness.ts'
 import type { Initializer } from './Initializer.ts'
 import { handlers } from './internal/server.ts'
@@ -27,11 +28,11 @@ export const layer = (
 ): Layer.Layer<never, never, Harness.Harness | RpcServer.Protocol> =>
   RpcServer.layer(HarnessRpcs).pipe(Layer.provide(handlers(options.initializers ?? [])))
 
-/** Open a Harness over the Storage and Registry, and serve it. */
+/** Open a Harness over the Storage, Registry and Extensions, and serve it. */
 export const layerWith = (
   options: Options = {},
 ): Layer.Layer<
   Harness.Harness | Session | Scheduler,
   CommitError,
-  Storage | Registry | RpcServer.Protocol
+  Storage | Registry | Extensions | RpcServer.Protocol
 > => layer(options).pipe(Layer.provideMerge(Harness.layerWith(options)))

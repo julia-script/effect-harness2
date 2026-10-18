@@ -2,7 +2,8 @@
  * The built-in generation task, ported from pi's `GenerationTask` (`harness/generation.ts`): one
  * model request of a run, and the tool round its answer starts.
  *
- * - `prepare` renders the agent's system prompt sections and tool declarations and appends the
+ * - `prepare` resolves the conversation's agent (see `Agent`), renders its system prompt sections
+ *   and tool declarations, and appends the
  *   positional `pi.system` entries the context needs, then fixes the request: the model, the
  *   request options, and the newest entry it includes.
  * - `request` streams the response. Partials commit to `pi.live.generation`, throttled; a partial
@@ -15,6 +16,8 @@
  *   `pi.tool` task the generation owns, all at once or one after another (`toolExecution`); a call
  *   to a tool the request did not offer is answered `tool_unavailable` at once. `tools` waits for
  *   them, then passes the `postTools` boundary and hands the run to a fresh generation.
+ * - Hooks (`Hooks`): `beforeRequest` may replace a request's messages, `afterResponse` sees every
+ *   response, `onYield` may continue the run after an answer, and `afterTools` sees each round.
  * - Compaction (see `Compaction`): preparation compacts first above the blocking threshold, starts
  *   a background compaction above the background one, and a `ContextOverflow` failure compacts and
  *   prepares again, once per generation.
@@ -24,20 +27,22 @@
  * Credentials are the provider's: a provider reads them fresh for each request.
  */
 import { Effect, Layer, Schema } from 'effect'
-import type { Context } from 'effect'
-import { DeferredHandle, ModelThinkingLevel } from '../model/Message.ts'
+import { DeferredHandle } from '../model/Message.ts'
+import type { AssistantMessage, Message } from '../model/Message.ts'
 import * as Model from '../model/Model.ts'
 import { EntryId, TaskId } from '../storage/schema/Ids.ts'
+import * as Hook from '../task/Hook.ts'
 import { Registry } from '../task/Registry.ts'
 import * as Task from '../task/Task.ts'
-import type * as Tool from '../tool/Tool.ts'
-import type * as Toolkit from '../tool/Toolkit.ts'
 import * as ToolTask from '../tool/ToolTask.ts'
+import * as Agent from './Agent.ts'
 import * as Compaction from './Compaction.ts'
+import { Extensions } from './Extensions.ts'
+import { current as currentAgent } from './internal/agent.ts'
 import * as internal from './internal/generation/task.ts'
-import type * as prompt from './internal/prompt.ts'
-import { RUN_KIND, toolHooks } from './internal/run.ts'
+import { RUN_KIND, toolLifecycle } from './internal/run.ts'
 import * as Settings from './Settings.ts'
+import type { UserInput } from './Submission.ts'
 
 /** The task kind. */
 export const name = RUN_KIND
@@ -94,80 +99,78 @@ export type Result = typeof Result.Type
 
 export type Generation = Task.Task<Record<string, never>, Checkpoint, Result>
 
-/** One named part of the system prompt. */
-export type Section = prompt.Section
-export type SectionInput = prompt.SectionInput
-
-/** What a generation asks with, read as each generation prepares. */
-export interface Agent {
-  /** Without one, a run ends `unanswered` with `no_model`. */
-  readonly model?: Model.Ref
-  /** Default `off`. */
-  readonly reasoning?: ModelThinkingLevel
-  readonly sections?: ReadonlyArray<Section>
-  /** The tools the model is offered, in order. */
-  readonly tools?: ReadonlyArray<Tool.Any>
+/** The hooks the generation asks (spec §7.2), for extensions to answer. */
+export interface Hooks {
+  /** Before every request attempt, recovery included: replace the messages of that request only. */
+  readonly beforeRequest: (
+    request: { readonly messages: ReadonlyArray<Message> },
+    api: Hook.Api,
+  ) => Effect.Effect<{ readonly messages: ReadonlyArray<Message> } | undefined, unknown>
+  /** Every response, before it is classified. */
+  readonly afterResponse: (message: AssistantMessage, api: Hook.Api) => Effect.Effect<void, unknown>
+  /**
+   * A final answer: `continue` appends user input and continues the run, unless the final
+   * boundary placed user input or a reset. The first continuation wins.
+   */
+  readonly onYield: (
+    answer: AssistantMessage,
+    api: Hook.Api,
+  ) => Effect.Effect<{ readonly continue: UserInput } | undefined, unknown>
+  /** Once every call of a round is terminal, with the round's result entries in call order. */
+  readonly afterTools: (
+    assistant: EntryId,
+    results: ReadonlyArray<EntryId>,
+    api: Hook.Api,
+  ) => Effect.Effect<void, unknown>
 }
+export const Hooks: Hook.Kind<Hooks> = Hook.kind<Hooks>(name)
 
 /**
- * The generation task, over the `Model` in context and `Settings.Current`. It offers the agent's
- * tools; their calls need the tool task, and compacting needs the compaction task, which `tasks`
- * and `layer` install with it.
+ * The generation task, over the `Model` and `Extensions` in context and `Settings.Current`. Each
+ * request resolves the conversation's agent: its model, reasoning, tools and sections. Calls
+ * need the tool task, and compacting needs the compaction task, which `tasks` and `layer` install
+ * with it.
  */
-export const make = (
-  agent: Agent | Effect.Effect<Agent>,
-): Effect.Effect<Generation, never, Model.Model> =>
-  Effect.gen(function* () {
+export const make: Effect.Effect<Generation, never, Model.Model | Extensions> = Effect.gen(
+  function* () {
     const model = yield* Model.Model
+    const extensions = yield* Extensions
     const settings = yield* Settings.Current
-    const current = Effect.isEffect(agent) ? agent : Effect.succeed(agent)
-    return Task.make(internal.definition({ model, settings, agent: current }))
-  })
+    return Task.make(internal.definition({ model, settings, extensions }))
+  },
+)
 
-export interface Options<Tools extends Record<string, Tool.Any>> {
-  /** An agent without `tools` is offered every tool of the toolkit. */
-  readonly agent: Agent | Effect.Effect<Agent>
-  readonly config?: ToolTask.Config<Tools>
-}
+/** The tool task over the tools and hooks of each call's conversation agent. */
+export const toolTask: Effect.Effect<ToolTask.ToolTask, never, Extensions> = Effect.gen(
+  function* () {
+    const extensions = yield* Extensions
+    const settings = yield* Settings.Current
+    return ToolTask.makeWith(
+      (api) =>
+        Effect.map(
+          currentAgent(api, api.conversationId, extensions, settings),
+          (agent): ToolTask.Resolution => ({
+            tool: (tool) => agent.tools.find((each) => each.tool.name === tool),
+            hooks: Agent.hooks(agent, ToolTask.Hooks),
+          }),
+        ),
+      toolLifecycle,
+    )
+  },
+)
 
-/** The generation, tool and compaction tasks, over `toolkit` and its `implementations`. */
-export const tasks = <Tools extends Record<string, Tool.Any>>(
-  toolkit: Toolkit.Toolkit<Tools>,
-  implementations: Context.Context<Toolkit.Implementation<Toolkit.Names<Tools>>>,
-  options: Options<Tools>,
-): Effect.Effect<ReadonlyArray<Task.Any>, never, Model.Model> =>
-  Effect.gen(function* () {
-    const offered = Object.values(toolkit.tools)
-    const withTools = (agent: Agent): Agent =>
-      agent.tools === undefined ? { ...agent, tools: offered } : agent
-    const agent = Effect.isEffect(options.agent)
-      ? Effect.map(options.agent, withTools)
-      : withTools(options.agent)
-    const config = options.config === undefined ? {} : { config: options.config }
-    return [
-      yield* make(agent),
-      ToolTask.make(toolkit, implementations, { ...config, hooks: toolHooks }),
-      yield* Compaction.make(agent),
-    ]
-  })
-
-/**
- * Install the generation, tool and compaction tasks in the `Registry`, over the `Model` and the handlers
- * `toolkit.toLayer()` provides.
- */
-export const layer = <Tools extends Record<string, Tool.Any>>(
-  toolkit: Toolkit.Toolkit<Tools>,
-  options: Options<Tools>,
-): Layer.Layer<
+/** The generation, tool and compaction tasks. */
+export const tasks: Effect.Effect<
+  ReadonlyArray<Task.Any>,
   never,
-  never,
-  Model.Model | Registry | Toolkit.Implementation<Toolkit.Names<Tools>>
-> =>
+  Model.Model | Extensions
+> = Effect.all([make, toolTask, Compaction.make])
+
+/** Install the generation, tool and compaction tasks in the `Registry`. */
+export const layer: Layer.Layer<never, never, Model.Model | Registry | Extensions> =
   Layer.effectDiscard(
     Effect.gen(function* () {
-      const implementations = yield* Effect.context<Toolkit.Implementation<Toolkit.Names<Tools>>>()
       const registry = yield* Registry
-      for (const task of yield* tasks(toolkit, implementations, options))
-        yield* registry.install(task)
+      for (const task of yield* tasks) yield* registry.install(task)
     }),
   )

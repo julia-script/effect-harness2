@@ -1,33 +1,16 @@
+/* oxlint-disable effecttsgo/any-unknown-in-error-context -- extension code may fail with anything; a failure is reported or answers the call */
 /**
  * The positional system prompt, ported from pi's `harness/prompt.ts`: which `pi.system` entries
  * make the sections and tools the model sees equal the ones the agent wants.
  */
-import { Effect } from 'effect'
+import { Cause, Effect } from 'effect'
 import type { Message, SystemMessage, ToolDefinition } from '../../model/Message.ts'
 import * as Transcript from '../../model/Transcript.ts'
 import type { EntryDraft } from '../../session/Session.ts'
 import type { ContextEdit } from '../../storage/schema/Entry.ts'
-import type { ConversationId } from '../../storage/schema/Ids.ts'
+import type { SectionInput } from '../Extension.ts'
 import { SYSTEM_KIND } from './context.ts'
 import type { View } from './context.ts'
-
-/** One named part of the system prompt. */
-export interface Section {
-  readonly key: string
-  /** Default: wrap the text as `<key>\n…\n</key>`; `false` leaves it as it is. */
-  readonly tag?: boolean
-  /**
-   * The section's text, or `undefined` to leave it out. A section that cannot render now can keep
-   * what the model sees with `input.shown[key]`.
-   */
-  readonly render: (input: SectionInput) => Effect.Effect<string | undefined>
-}
-
-export interface SectionInput {
-  readonly conversationId: ConversationId
-  /** The sections the model sees now, by key. */
-  readonly shown: Readonly<Record<string, string>>
-}
 
 /** Sections in effect after the system messages in order: set in place, `null` deletes. */
 export const replaySections = (messages: ReadonlyArray<Message>): Map<string, string> => {
@@ -42,22 +25,33 @@ export const replaySections = (messages: ReadonlyArray<Message>): Map<string, st
   return shown
 }
 
-/** Render `sections` in order. */
+/**
+ * Render the agent's sections in order. A section that fails keeps the text the model sees, and
+ * the failure is reported as a warning.
+ */
 export const renderSections = (
-  sections: ReadonlyArray<Section>,
-  conversationId: ConversationId,
+  input: Omit<SectionInput, 'shown'>,
   shown: ReadonlyMap<string, string>,
 ) =>
   Effect.gen(function* () {
     const desired = new Map<string, string>()
-    const input: SectionInput = { conversationId, shown: Object.fromEntries(shown) }
-    for (const section of sections) {
-      const text = yield* section.render(input)
-      if (text === undefined) continue
-      desired.set(
-        section.key,
-        section.tag === false ? text : `<${section.key}>\n${text}\n</${section.key}>`,
+    const rendering: SectionInput = { ...input, shown: Object.fromEntries(shown) }
+    for (const section of input.agent.sections) {
+      const rendered = yield* Effect.catchCause(
+        Effect.map(section.render(rendering), (text) =>
+          text === undefined || section.tag === false
+            ? text
+            : `<${section.key}>\n${text}\n</${section.key}>`,
+        ),
+        (cause) =>
+          Cause.hasInterrupts(cause)
+            ? Effect.interrupt
+            : Effect.as(
+                Effect.logWarning(`Section ${section.key} failed to render`, cause),
+                shown.get(section.key),
+              ),
       )
+      if (rendered !== undefined) desired.set(section.key, rendered)
     }
     return desired
   })

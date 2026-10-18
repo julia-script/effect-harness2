@@ -1,3 +1,4 @@
+/* oxlint-disable effecttsgo/any-unknown-in-error-context -- extension code may fail with anything; a failure is reported or answers the call */
 /**
  * The tool round (spec §8.5): the tool tasks of one tool-calling answer, owned by its generation.
  */
@@ -9,11 +10,14 @@ import type { Tx } from '../../../session/Session.ts'
 import type { EntryId, TaskId } from '../../../storage/schema/Ids.ts'
 import * as ToolResult from '../../../tool/ToolResult.ts'
 import * as ToolTask from '../../../tool/ToolTask.ts'
+import * as Hook from '../../../task/Hook.ts'
+import * as Agent from '../../Agent.ts'
+import { Hooks } from '../../Generation.ts'
 import * as Live from '../../Live.ts'
 import { prepareBoundary } from '../inbox.ts'
 import { appendAssistant, continueRun } from '../run.ts'
 import type { Request } from './classify.ts'
-import { readView } from './env.ts'
+import { agentOf, readView } from './env.ts'
 import type { Env, GenerationRuntime, Next } from './env.ts'
 
 /** A tool task for call `callId`, owned by the generation. */
@@ -108,17 +112,33 @@ export const startToolRound = (
  * generation, or, for a queued reset, end it.
  */
 const finishToolRound = (runtime: GenerationRuntime, env: Env, assistant: EntryId) =>
-  runtime.commit((tx) =>
-    Effect.gen(function* () {
-      const boundary = yield* prepareBoundary(tx, runtime.conversationId, yield* env.settings)
-      yield* continueRun(tx, boundary, runtime.taskId)
-      const next: Next = {
-        status: 'terminal',
-        outcome: { status: 'completed', result: { entryId: assistant } },
-      }
-      return next
-    }),
+  Effect.andThen(
+    afterTools(runtime, env, assistant),
+    runtime.commit((tx) =>
+      Effect.gen(function* () {
+        const boundary = yield* prepareBoundary(tx, runtime.conversationId, yield* env.settings)
+        yield* continueRun(tx, boundary, runtime.taskId)
+        const next: Next = {
+          status: 'terminal',
+          outcome: { status: 'completed', result: { entryId: assistant } },
+        }
+        return next
+      }),
+    ),
   )
+
+/** Show the round's result entries, in call order, to `afterTools`. */
+const afterTools = (runtime: GenerationRuntime, env: Env, assistant: EntryId) =>
+  Effect.gen(function* () {
+    const hooks = Agent.hooks(yield* agentOf(env, runtime), Hooks)
+    if (hooks.length === 0) return
+    const slots = (yield* runtime.snapshot(Live.document, runtime.conversationId))?.tools ?? []
+    const results = slots.flatMap((slot) => (slot.entry === undefined ? [] : [slot.entry]))
+    for (const hook of hooks) {
+      if (hook.afterTools === undefined) continue
+      yield* Hook.ask(Effect.asVoid(hook.afterTools(assistant, results, runtime)), 'afterTools')
+    }
+  })
 
 type ToolsCheckpoint = {
   readonly phase: 'tools'

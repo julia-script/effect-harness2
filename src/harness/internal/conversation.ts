@@ -7,9 +7,13 @@ import type { TxDocumentError, TxReadError } from '../../session/SessionError.ts
 import type { ConversationRecord } from '../../storage/schema/Conversation.ts'
 import { ROOT_CONVERSATION_ID } from '../../storage/schema/Ids.ts'
 import type { ConversationId, EntryId } from '../../storage/schema/Ids.ts'
-import { createCompaction } from './compaction/status.ts'
 import type { Service as SchedulerService } from '../../task/Scheduler.ts'
+import * as Agent from '../Agent.ts'
 import type { Conversation, CreateOptions, Init } from '../Conversation.ts'
+import type { Service as Extensions } from '../Extensions.ts'
+import type { Settings } from '../Settings.ts'
+import { current } from './agent.ts'
+import { createCompaction } from './compaction/status.ts'
 import { RESET_KIND } from './inbox.ts'
 import type { Submissions } from './submissions.ts'
 import { readsFirst } from './submissions.ts'
@@ -18,6 +22,8 @@ export interface Host {
   readonly session: SessionService
   readonly scheduler: SchedulerService
   readonly submissions: Submissions
+  readonly extensions: Extensions
+  readonly settings: Effect.Effect<Settings>
 }
 
 /** Where a conversation is created. */
@@ -92,6 +98,8 @@ export const conversation = (host: Host, id: ConversationId): Conversation => ({
         ...(instructions === undefined ? {} : { instructions }),
       }),
     ),
+  configure: (change) => host.session.commit((tx) => Agent.configure(tx, id, change)),
+  agent: Effect.map(current(host.session, id, host.extensions, host.settings), Agent.view),
   commit: (change, scope) => host.session.commit(change, { ...scope, conversationId: id }),
   entries: (query, limit, cursor) =>
     readsFirst(

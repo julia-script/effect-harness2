@@ -9,7 +9,7 @@ import { Deferred, Effect, Exit, Ref } from 'effect'
 import { Faux } from '../../model/index.ts'
 import { ModelError, Rejected, Retryable } from '../../model/ModelError.ts'
 import { Read } from '../../tool/test/support.ts'
-import type * as Generation from '../Generation.ts'
+import type * as Extension from '../Extension.ts'
 import {
   describe,
   entriesOf,
@@ -34,7 +34,7 @@ group('generation', () => {
   test('answers a run, with the system prompt and tools leading the request', () =>
     runTest((storage) =>
       Effect.gen(function* () {
-        const section: Generation.Section = {
+        const section: Extension.Section = {
           key: 'rules',
           render: () => Effect.succeed('Be brief.'),
         }
@@ -69,7 +69,7 @@ group('generation', () => {
     runTest((storage) =>
       Effect.gen(function* () {
         const text = yield* Ref.make('one')
-        const section: Generation.Section = { key: 's', tag: false, render: () => Ref.get(text) }
+        const section: Extension.Section = { key: 's', tag: false, render: () => Ref.get(text) }
         const { harness, faux } = yield* open(storage, {
           agent: (model) => ({ model: model.ref(), sections: [section], tools: [] }),
         })
@@ -251,7 +251,7 @@ group('generation', () => {
   test('ends the run no_model without a model', () =>
     runTest((storage) =>
       Effect.gen(function* () {
-        const { harness } = yield* open(storage, { agent: () => ({}) })
+        const { harness } = yield* open(storage, { agent: () => ({ model: null }) })
         const conversation = yield* ownerless(harness)
         const settled = yield* Effect.orDie(
           Effect.flatMap(conversation.submit({ type: 'input', content: 'hi' }), (s) => s.wait),

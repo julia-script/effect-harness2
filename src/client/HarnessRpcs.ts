@@ -10,6 +10,7 @@ import {
   InvalidSubmission,
   SubmissionNotFound,
 } from '../harness/HarnessError.ts'
+import { Change, View } from '../harness/AgentState.ts'
 import { AbortResult, Draft, Settled } from '../harness/Submission.ts'
 import {
   DocumentError,
@@ -95,6 +96,15 @@ export class HarnessRpcs extends RpcGroup.make(
   Rpc.make('Compact', {
     payload: { conversationId: ConversationId, instructions: Schema.optionalKey(Schema.String) },
     success: TaskId,
+    error: CommitError,
+  }),
+  Rpc.make('Configure', {
+    payload: { conversationId: ConversationId, change: Change },
+    error: CommitError,
+  }),
+  Rpc.make('Agent', {
+    payload: { conversationId: ConversationId },
+    success: View,
     error: CommitError,
   }),
   Rpc.make('Entries', {

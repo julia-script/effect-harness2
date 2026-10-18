@@ -7,7 +7,8 @@ import type { EntryDraft } from '../../../session/Session.ts'
 import type { TaskOutcome } from '../../../storage/schema/Task.ts'
 import * as Tool from '../../../tool/Tool.ts'
 import { Result as CompactionResult } from '../../Compaction.ts'
-import type { Agent, Checkpoint } from '../../Generation.ts'
+import type { Resolved } from '../../Agent.ts'
+import type { Checkpoint } from '../../Generation.ts'
 import { EmptyConversation } from '../../GenerationError.ts'
 import * as Live from '../../Live.ts'
 import { compactionFor } from '../../Settings.ts'
@@ -16,7 +17,7 @@ import { createCompaction } from '../compaction/status.ts'
 import { decodeAll } from '../context.ts'
 import { planSystemEntries, renderSections, replaySections } from '../prompt.ts'
 import { fail, failNoModel } from './classify.ts'
-import { readView } from './env.ts'
+import { agentOf, readView } from './env.ts'
 import type { Env, GenerationRuntime, Next } from './env.ts'
 
 type Prepare = Extract<Checkpoint, { readonly phase: 'prepare' }>
@@ -106,15 +107,16 @@ const prepare = (
   env: Env,
   runtime: GenerationRuntime,
   checkpoint: Prepare,
-  agent: Agent,
+  agent: Resolved,
   info: { readonly ref: Model.Ref; readonly contextWindow: number },
 ) =>
   Effect.gen(function* () {
     const { attempt, compacted } = checkpoint
     const view = yield* readView(runtime)
     const shown = replaySections(view.messages)
-    const desired = yield* renderSections(agent.sections ?? [], runtime.conversationId, shown)
-    const tools = (agent.tools ?? []).map((tool) => Tool.definition(tool))
+    const { conversationId } = runtime
+    const desired = yield* renderSections({ conversationId, agent, read: runtime }, shown)
+    const tools = agent.tools.map(({ tool }) => Tool.definition(tool))
     const entries = planSystemEntries(view, desired, tools, yield* Clock.currentTimeMillis)
     const settings = yield* env.settings
     const planned = entries.flatMap((entry) => decodeAll(entry.model ?? []))
@@ -124,7 +126,7 @@ const prepare = (
         : undefined
     // The transcript is unchanged until the summary lands.
     if (over === 'blocking') return yield* compactFirst(runtime, attempt)
-    const reasoning = agent.reasoning ?? 'off'
+    const { reasoning } = agent
     const options = reasoning === 'off' ? settings.stream : { ...settings.stream, reasoning }
     return yield* fixRequest(runtime, entries, over === 'background', {
       attempt,
@@ -140,7 +142,7 @@ export const preparePhase =
   (task: { readonly state: { readonly checkpoint: Prepare } }, runtime: GenerationRuntime) =>
     Effect.gen(function* () {
       const { checkpoint } = task.state
-      const agent = yield* env.agent
+      const agent = yield* agentOf(env, runtime)
       const ref = agent.model
       const info = ref === undefined ? undefined : env.model.info(ref)
       if (ref === undefined || info === undefined) return yield* failNoModel(runtime, ref)

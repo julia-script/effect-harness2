@@ -1,18 +1,28 @@
+/* oxlint-disable effecttsgo/any-unknown-in-error-context -- the loop's resolver may fail with anything, and a failure faults the task */
 /**
  * The phases of the tool task.
  */
 import { Clock, Effect, Exit, Option, Result, Schema } from 'effect'
-import type { Context } from 'effect'
 import { AssistantMessage } from '../../model/Message.ts'
 import type { ToolCall } from '../../model/Message.ts'
 import type { Tx } from '../../session/Session.ts'
 import { JsonObject } from '../../storage/schema/Json.ts'
+import * as Hook from '../../task/Hook.ts'
 import type { Definition, NextState, Runtime } from '../../task/Task.ts'
 import type { Any } from '../Tool.ts'
 import { CallNotFound } from '../ToolError.ts'
 import * as ToolResult from '../ToolResult.ts'
-import type { Checkpoint, Hooks, Input, Result as TaskResult } from '../ToolTask.ts'
-import { COMPLETED, execute, install } from './execute.ts'
+import type {
+  Checkpoint,
+  Hooks,
+  Input,
+  Lifecycle,
+  Resolution,
+  Resolve,
+  Result as TaskResult,
+} from '../ToolTask.ts'
+import { COMPLETED, execute, rebound } from './execute.ts'
+import { afterTool, beforeTool } from './hooks.ts'
 import type { Ending, Installed, Ran } from './execute.ts'
 
 type ToolRuntime = Runtime<Input, Checkpoint, TaskResult>
@@ -51,28 +61,43 @@ const terminal = (ending: Ending, result: TaskResult): NextState<Checkpoint, Tas
   return { status: 'terminal', outcome: { status: ending.status, result } }
 }
 
-/** The task as its hooks see it. */
+/** The task as its lifecycle sees it. */
 const callOf = (runtime: ToolRuntime) => ({
   taskId: runtime.taskId,
   conversationId: runtime.conversationId,
 })
 
 /** In one commit: append the call's result entry and end the task. */
-const settleIn = (tx: Tx, runtime: ToolRuntime, hooks: Hooks, call: ToolCall, ran: Ran) =>
+const settleIn = (tx: Tx, runtime: ToolRuntime, lifecycle: Lifecycle, call: ToolCall, ran: Ran) =>
   Effect.gen(function* () {
     const timestamp = yield* Clock.currentTimeMillis
     const timing =
       ran.durationMs === undefined ? { timestamp } : { timestamp, durationMs: ran.durationMs }
     const entry = yield* ToolResult.append(tx, runtime.conversationId, call, ran.result, timing)
-    if (hooks.settled !== undefined) yield* hooks.settled(tx, callOf(runtime), entry.id)
+    if (lifecycle.settled !== undefined) yield* lifecycle.settled(tx, callOf(runtime), entry.id)
     return terminal(ran.ending, { entryId: entry.id })
   })
 
 /** Settle with the call read on the line. */
-const settle = (runtime: ToolRuntime, hooks: Hooks, input: Input, build: (call: ToolCall) => Ran) =>
+const settle = (
+  runtime: ToolRuntime,
+  lifecycle: Lifecycle,
+  input: Input,
+  build: (call: ToolCall) => Ran,
+) =>
   runtime.commit((tx) =>
-    Effect.flatMap(readCall(tx, input), (call) => settleIn(tx, runtime, hooks, call, build(call))),
+    Effect.flatMap(readCall(tx, input), (call) =>
+      settleIn(tx, runtime, lifecycle, call, build(call)),
+    ),
   )
+
+/** Settle at once with `result`: the call never ran. */
+const answer = (
+  runtime: ToolRuntime,
+  lifecycle: Lifecycle,
+  input: Input,
+  result: ToolResult.Result,
+) => settle(runtime, lifecycle, input, () => ({ result, ending: COMPLETED }))
 
 /** The call, read in a commit of its own. */
 const currentCall = (runtime: ToolRuntime, input: Input) =>
@@ -87,80 +112,91 @@ const currentCall = (runtime: ToolRuntime, input: Input) =>
       .pipe(Effect.flatMap(() => Effect.fromNullishOr(call)))
   })
 
-/** Run the handler on the arguments of intent, then settle. */
+/** Run the handler on the arguments of intent, ask `afterTool`, then settle. */
 const run = (
   runtime: ToolRuntime,
-  hooks: Hooks,
+  lifecycle: Lifecycle,
+  hooks: ReadonlyArray<Partial<Hooks>>,
   call: ToolCall,
   installed: Installed,
   args: JsonObject,
 ) =>
-  Effect.flatMap(execute(call, installed, args), (ran) =>
-    runtime.commit((tx) => settleIn(tx, runtime, hooks, call, ran)),
-  )
+  Effect.gen(function* () {
+    const ran = yield* execute(call, installed, args)
+    const asked = { ...call, arguments: args }
+    const result = yield* afterTool(hooks, asked, ran.result, runtime)
+    const final = result === ran.result ? ran : { ...ran, result: rebound(installed.tool, result) }
+    yield* runtime.commit((tx) => settleIn(tx, runtime, lifecycle, call, final))
+  })
 
 const encodeArguments = (tool: Any, params: unknown) =>
   Effect.map(Effect.exit(Schema.encodeUnknownEffect(tool.parameters)(params)), (exit) =>
     Exit.isSuccess(exit) ? Schema.decodeUnknownOption(JsonObject)(exit.value) : Option.none(),
   )
 
-/** Why the call cannot run, or the arguments it runs with, encoded for the checkpoint. */
-const prepare = (call: ToolCall, installed: Installed | undefined) =>
+/** Why the call cannot run on `args`, or the arguments it runs with, encoded for the checkpoint. */
+const prepare = (call: ToolCall, installed: Installed | undefined, args: JsonObject) =>
   Effect.gen(function* () {
     if (installed === undefined)
       return ToolResult.failure('tool_unavailable', `Tool ${call.name} is not available`)
-    const decoded = yield* Effect.result(
-      Schema.decodeEffect(installed.tool.parameters)(call.arguments),
-    )
+    const decoded = yield* Effect.result(Schema.decodeEffect(installed.tool.parameters)(args))
     if (Result.isFailure(decoded)) {
       const message = `Invalid arguments for ${call.name}: ${decoded.failure.message}`
       return ToolResult.failure('invalid_arguments', message)
     }
-    const args = yield* encodeArguments(installed.tool, decoded.success)
-    if (Option.isNone(args))
+    const encoded = yield* encodeArguments(installed.tool, decoded.success)
+    if (Option.isNone(encoded))
       return ToolResult.failure(
         'invalid_arguments',
         `Arguments of ${call.name} are not a JSON object`,
       )
-    return { args: args.value, installed }
+    return { args: encoded.value, installed }
+  })
+
+/** Validate, ask `beforeTool`, and validate what it leaves: the call runs, or its answer. */
+const admit = (call: ToolCall, resolution: Resolution, api: Hook.Api) =>
+  Effect.gen(function* () {
+    const installed = resolution.tool(call.name)
+    const checked = yield* prepare(call, installed, call.arguments)
+    if (!('args' in checked)) return checked
+    const decided = yield* beforeTool(resolution.hooks, { ...call, arguments: checked.args }, api)
+    if ('block' in decided)
+      return ToolResult.failure('blocked', `Tool call blocked: ${decided.block}`)
+    return decided.args === checked.args ? checked : yield* prepare(call, installed, decided.args)
   })
 
 /**
- * The `call` phase: resolve and validate in the intent commit, which settles at once when the
- * call cannot run, then run the handler.
+ * The `call` phase: resolve, validate, and ask `beforeTool`, settling at once when the call
+ * cannot run; then record intent and run the handler.
  */
 const callPhase =
-  (tools: ReadonlyMap<string, Installed>, hooks: Hooks) =>
+  (resolve: Resolve, lifecycle: Lifecycle) =>
   (task: { readonly input: Input }, runtime: ToolRuntime) =>
     Effect.gen(function* () {
-      let intent:
-        | { readonly call: ToolCall; readonly installed: Installed; readonly args: JsonObject }
-        | undefined
+      const call = yield* currentCall(runtime, task.input)
+      const resolution = yield* resolve(runtime)
+      const admitted = yield* admit(call, resolution, runtime)
+      if (!('args' in admitted)) return yield* answer(runtime, lifecycle, task.input, admitted)
+      const { installed, args } = admitted
       yield* runtime.commit((tx) =>
         Effect.gen(function* () {
-          const call = yield* readCall(tx, task.input)
-          const prepared = yield* prepare(call, tools.get(call.name))
-          if (!('args' in prepared))
-            return yield* settleIn(tx, runtime, hooks, call, {
-              result: prepared,
-              ending: COMPLETED,
-            })
-          intent = { call, installed: prepared.installed, args: prepared.args }
-          if (hooks.started !== undefined) yield* hooks.started(tx, callOf(runtime))
-          const { replay } = prepared.installed.tool
+          if (lifecycle.started !== undefined) yield* lifecycle.started(tx, callOf(runtime))
           return {
             status: 'running' as const,
-            checkpoint: { phase: 'execute' as const, arguments: prepared.args, replay },
+            checkpoint: {
+              phase: 'execute' as const,
+              arguments: args,
+              replay: installed.tool.replay,
+            },
           }
         }),
       )
-      if (intent !== undefined)
-        yield* run(runtime, hooks, intent.call, intent.installed, intent.args)
+      return yield* run(runtime, lifecycle, resolution.hooks, call, installed, args)
     })
 
 /** The `execute` phase, reached only by recovery: rerun only when both policies say `safe`. */
 const executePhase =
-  (tools: ReadonlyMap<string, Installed>, hooks: Hooks) =>
+  (resolve: Resolve, lifecycle: Lifecycle) =>
   (
     task: {
       readonly input: Input
@@ -171,12 +207,13 @@ const executePhase =
     Effect.gen(function* () {
       const { arguments: args, replay } = task.state.checkpoint
       const call = yield* currentCall(runtime, task.input)
-      const installed = tools.get(call.name)
+      const resolution = yield* resolve(runtime)
+      const installed = resolution.tool(call.name)
       if (replay === 'safe' && installed?.tool.replay === 'safe')
-        return yield* run(runtime, hooks, call, installed, args)
+        return yield* run(runtime, lifecycle, resolution.hooks, call, installed, args)
       const message = `Tool ${call.name} was interrupted and may have partially run`
       // `failed` records cancellation intent for what the call owns, now left unsupervised.
-      return yield* settle(runtime, hooks, task.input, () => ({
+      return yield* settle(runtime, lifecycle, task.input, () => ({
         result: ToolResult.failure('interrupted', message),
         ending: { status: 'failed', message },
       }))
@@ -193,22 +230,17 @@ const abortCode = (
   return ['abandoned', `Tool ${name} was not started: its caller ended with a restart`]
 }
 
-export const definition = <Services>(
-  tools: ReadonlyArray<Any>,
-  implementations: Context.Context<Services>,
-  config: Readonly<Record<string, unknown>>,
-  hooks: Hooks,
-): Definition<Input, Checkpoint, TaskResult> => {
-  const byName = install(tools, implementations, config)
-  return {
-    name: NAME,
-    version: 1,
-    initial: () => ({ phase: 'call' }),
-    phases: { call: callPhase(byName, hooks), execute: executePhase(byName, hooks) },
-    abort: (task, runtime) =>
-      settle(runtime, hooks, task.input, (call) => {
-        const [code, message] = abortCode(task, call.name)
-        return { result: ToolResult.failure(code, message), ending: { status: 'aborted' } }
-      }),
-  }
-}
+export const definition = (
+  resolve: Resolve,
+  lifecycle: Lifecycle,
+): Definition<Input, Checkpoint, TaskResult> => ({
+  name: NAME,
+  version: 1,
+  initial: () => ({ phase: 'call' }),
+  phases: { call: callPhase(resolve, lifecycle), execute: executePhase(resolve, lifecycle) },
+  abort: (task, runtime) =>
+    settle(runtime, lifecycle, task.input, (call) => {
+      const [code, message] = abortCode(task, call.name)
+      return { result: ToolResult.failure(code, message), ending: { status: 'aborted' } }
+    }),
+})

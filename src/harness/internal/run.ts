@@ -13,7 +13,8 @@ import * as ToolTask from '../../tool/ToolTask.ts'
 import * as Live from '../Live.ts'
 import * as Usage from '../Usage.ts'
 import { COMPACTION_KIND, failStatus } from './compaction/status.ts'
-import { applyBoundary } from './inbox.ts'
+import type { UserInput } from '../Submission.ts'
+import { appendInput, applyBoundary } from './inbox.ts'
 import type { Boundary } from './inbox.ts'
 import { strictJson } from './json.ts'
 
@@ -100,8 +101,8 @@ export const convertPartial = Effect.fnUntraced(function* (
 const slotOf = (live: Draft<Live.State>, taskId: TaskId) =>
   live.tools?.find((slot) => slot.taskId === taskId)
 
-/** The tool task's hooks: its slot runs when the call starts, and is done with its result. */
-export const toolHooks: ToolTask.Hooks = {
+/** The tool task's lifecycle: its slot runs when the call starts, and is done with its result. */
+export const toolLifecycle: ToolTask.Lifecycle = {
   started: (tx, call) =>
     Effect.map(tx.doc(Live.document, call.conversationId), (live) => {
       const slot = slotOf(live, call.taskId)
@@ -123,18 +124,27 @@ export const handOver = (live: Draft<Live.State>, from: TaskId, to: TaskId): voi
 
 /**
  * A final answer (spec §6): the final boundary places queued items, the run's inputs settle
- * `done` with `answer`, and the user items it placed start the next run. The caller prepares the
- * boundary at the start of its commit, before it appends the answer.
+ * `done` with `answer`, and the user items it placed start the next run. A `continuation` from
+ * `onYield` instead appends user input and hands the run to a fresh generation, unless the
+ * boundary placed user items or a reset. The caller prepares the boundary at the start of its
+ * commit, before it appends the answer.
  */
 export const finishRun = Effect.fnUntraced(function* (
   tx: Tx,
   boundary: Boundary,
   taskId: TaskId,
   answer: EntryId,
+  continuation?: UserInput,
 ) {
   const { conversationId } = boundary
   const live = yield* tx.doc(Live.document, conversationId)
-  const { users } = yield* applyBoundary(tx, boundary, 'final')
+  const { users, reset } = yield* applyBoundary(tx, boundary, 'final')
+  if (continuation !== undefined && users.length === 0 && !reset && live.run?.taskId === taskId) {
+    yield* appendInput(tx, conversationId, continuation)
+    handOver(live, taskId, yield* createRunTask(tx, conversationId))
+    delete live.generation
+    return
+  }
   yield* endRun(tx, live, taskId, { status: 'done', answer })
   if (users.length > 0) yield* startRun(tx, conversationId, live, users)
 })

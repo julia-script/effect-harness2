@@ -13,11 +13,11 @@ import { JsonObject } from '../storage/schema/Json.ts'
 import * as messages from './internal/messages.ts'
 import * as route from './internal/route.ts'
 import type { DeferredHandle } from './Message.ts'
-import { AssistantMessage, Message, ThinkingLevel, ToolCall } from './Message.ts'
+import { AssistantMessage, Message, ModelRef, ThinkingLevel, ToolCall } from './Message.ts'
 import type { ModelError } from './ModelError.ts'
 
 /** Which model to ask. */
-export const Ref = Schema.Struct({ provider: Schema.String, modelId: Schema.String })
+export const Ref = ModelRef
 export type Ref = typeof Ref.Type
 
 /** Cost in USD per million tokens. */

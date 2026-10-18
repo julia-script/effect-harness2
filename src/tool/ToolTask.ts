@@ -18,9 +18,12 @@
  *   `replay: 'safe'`, both when intent was recorded and now, runs again.
  * - `aborted`, or on an abandon after restart `interrupted` and `abandoned`: the abort handler.
  *
- * The task needs no services: `make` closes over the implementations, and `layer` installs it in
- * the `Registry` from the implementations a `Toolkit.toLayer()` provides. Config is given at
- * install, encoded; per-conversation config comes with agents.
+ * Extensions answer its hooks: `beforeTool` may replace a call's arguments or block it (`blocked`),
+ * and `afterTool` may replace its result.
+ *
+ * The task needs no services: `makeWith` resolves each call's tools and hooks through a function,
+ * as the harness does from the conversation's agent; `make` closes over a toolkit's
+ * implementations, and `layer` installs that in the `Registry`. Config is given encoded.
  */
 import { Effect, Layer, Schema } from 'effect'
 import type { Context } from 'effect'
@@ -29,8 +32,12 @@ import type { TxDocumentError } from '../session/SessionError.ts'
 import { EntryId } from '../storage/schema/Ids.ts'
 import type { ConversationId, TaskId } from '../storage/schema/Ids.ts'
 import { JsonObject } from '../storage/schema/Json.ts'
+import type { ToolCall } from '../model/Message.ts'
+import * as Hook from '../task/Hook.ts'
 import { Registry } from '../task/Registry.ts'
 import * as Task from '../task/Task.ts'
+import type * as ToolResult from './ToolResult.ts'
+import * as internalExecute from './internal/execute.ts'
 import * as internal from './internal/task.ts'
 import type * as Tool from './Tool.ts'
 import type * as Toolkit from './Toolkit.ts'
@@ -71,7 +78,7 @@ export type Config<Tools extends Record<string, Tool.Any>> = {
   readonly [Name in keyof Tools]?: Tools[Name]['config']['Encoded']
 }
 
-/** The tool task of a call, as its hooks see it. */
+/** The tool task of a call. */
 export interface Call {
   readonly taskId: TaskId
   readonly conversationId: ConversationId
@@ -81,30 +88,71 @@ export interface Call {
  * Run in the tool task's own commits, so the loop can present the call: `started` when the call
  * records intent and its handler is about to run, `settled` with its result entry.
  */
-export interface Hooks {
+export interface Lifecycle {
   readonly started?: (tx: Tx, call: Call) => Effect.Effect<void, TxDocumentError>
   readonly settled?: (tx: Tx, call: Call, entry: EntryId) => Effect.Effect<void, TxDocumentError>
 }
 
-export interface Options<Tools extends Record<string, Tool.Any>> {
-  readonly config?: Config<Tools>
-  readonly hooks?: Hooks
+/** A model-issued call as hooks see it, with the arguments it would run with. */
+export type HookCall = ToolCall
+
+/** The hooks the tool task asks (spec §7.2), for extensions to answer. */
+export interface Hooks {
+  /**
+   * Before intent: replace the arguments, or block the call with error text; the first block
+   * wins. A failing hook blocks the call with its failure.
+   */
+  readonly beforeTool: (
+    call: HookCall,
+    api: Hook.Api,
+  ) => Effect.Effect<
+    { readonly arguments?: JsonObject; readonly block?: string } | undefined,
+    unknown
+  >
+  /** After execution, before the result is committed: replace the result. */
+  readonly afterTool: (
+    call: HookCall,
+    result: ToolResult.Result,
+    api: Hook.Api,
+  ) => Effect.Effect<ToolResult.Result | undefined, unknown>
+}
+export const Hooks: Hook.Kind<Hooks> = Hook.kind<Hooks>(name)
+
+/** A tool the task can run: its declaration, its implementation if any, and its config, encoded. */
+export type Installed = internalExecute.Installed
+
+/** What a call resolves against: the tool of a name, and the hooks it asks, in order. */
+export interface Resolution {
+  readonly tool: (name: string) => Installed | undefined
+  readonly hooks: ReadonlyArray<Partial<Hooks>>
 }
 
-/** The tool task over the tools of `toolkit` and their `implementations`. */
+/** Resolve the tools and hooks of a call, once per phase, with the task's reads. */
+export type Resolve = (api: Hook.Api) => Effect.Effect<Resolution, unknown>
+
+export interface Options<Tools extends Record<string, Tool.Any>> {
+  readonly config?: Config<Tools>
+  readonly lifecycle?: Lifecycle
+}
+
+/** The tool task over a resolver: the loop picks each conversation's tools and hooks. */
+export const makeWith = (resolve: Resolve, lifecycle: Lifecycle = {}): ToolTask =>
+  Task.make(internal.definition(resolve, lifecycle))
+
+/** The tool task over the tools of `toolkit` and their `implementations`, with no hooks. */
 export const make = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.Toolkit<Tools>,
   implementations: Context.Context<Toolkit.Implementation<Toolkit.Names<Tools>>>,
   options: Options<Tools> = {},
-): ToolTask =>
-  Task.make(
-    internal.definition(
-      Object.values(toolkit.tools),
-      implementations,
-      options.config ?? {},
-      options.hooks ?? {},
-    ),
+): ToolTask => {
+  const tools = internalExecute.install(
+    Object.values(toolkit.tools),
+    implementations,
+    options.config ?? {},
   )
+  const resolution: Resolution = { tool: (tool) => tools.get(tool), hooks: [] }
+  return makeWith(() => Effect.succeed(resolution), options.lifecycle)
+}
 
 /** Install the tool task in the `Registry`, over the implementations `toolkit.toLayer()` provides. */
 export const layer = <Tools extends Record<string, Tool.Any>>(
@@ -118,3 +166,10 @@ export const layer = <Tools extends Record<string, Tool.Any>>(
       yield* registry.install(make(toolkit, implementations, options))
     }),
   )
+
+/** Each of `tools` by name, with its implementation from `implementations` and its config. */
+export const install: <Services>(
+  tools: ReadonlyArray<Tool.Any>,
+  implementations: Context.Context<Services>,
+  config: Readonly<Record<string, unknown>>,
+) => ReadonlyMap<string, Installed> = internalExecute.install

@@ -1,17 +1,21 @@
+/* oxlint-disable effecttsgo/any-unknown-in-error-context -- extension code may fail with anything; a failure is reported or answers the call */
 /**
  * The `request` and `poll` phases: one model response, streamed or fetched, then classified.
  */
 import { Clock, Effect, Fiber, Option, Ref, Stream } from 'effect'
 import { cast } from 'effect/Function'
-import type { AssistantMessage } from '../../../model/Message.ts'
+import type { AssistantMessage, Message } from '../../../model/Message.ts'
 import * as Model from '../../../model/Model.ts'
 import { ModelError, Retryable } from '../../../model/ModelError.ts'
+import * as Hook from '../../../task/Hook.ts'
+import * as Agent from '../../Agent.ts'
+import { Hooks } from '../../Generation.ts'
 import type { Checkpoint } from '../../Generation.ts'
 import * as Live from '../../Live.ts'
 import { strictJson } from '../json.ts'
 import { convertPartial } from '../run.ts'
 import { classify, failNoModel } from './classify.ts'
-import { readView, sleepUntil } from './env.ts'
+import { agentOf, readView, sleepUntil } from './env.ts'
 import type { Env, GenerationRuntime } from './env.ts'
 
 /** Commit `partial` as the attempt's live message. */
@@ -65,6 +69,25 @@ const streamResponse = (
     })
   })
 
+/** Ask `beforeRequest` in order, each replacing the messages the earlier ones left. */
+const beforeRequest = (
+  hooks: ReadonlyArray<Partial<Hooks>>,
+  messages: ReadonlyArray<Message>,
+  api: Hook.Api,
+) =>
+  Effect.gen(function* () {
+    let current = messages
+    for (const hook of hooks) {
+      if (hook.beforeRequest === undefined) continue
+      const replaced = yield* Hook.ask(
+        hook.beforeRequest({ messages: current }, api),
+        'beforeRequest',
+      )
+      if (Option.isSome(replaced)) current = replaced.value.messages
+    }
+    return current
+  })
+
 type Phase<P extends Checkpoint['phase']> = {
   readonly state: { readonly checkpoint: Extract<Checkpoint, { readonly phase: P }> }
 }
@@ -87,16 +110,17 @@ export const requestPhase = (env: Env) => (task: Phase<'request'>, runtime: Gene
     const info = env.model.info(ref)
     if (info === undefined) return yield* failNoModel(runtime, ref)
     const { messages } = yield* readView(runtime, cutoff)
+    const hooks = Agent.hooks(yield* agentOf(env, runtime), Hooks)
     const request: Model.Request = {
       model: ref,
-      messages,
+      messages: yield* beforeRequest(hooks, messages, runtime),
       options: { ...options, sessionId: String(conversationId) },
     }
     const outcome = yield* Effect.result(streamResponse(runtime, env, request, info, attempt))
     return yield* classify(
       runtime,
       env,
-      { attempt, compacted, model: ref, cutoff, messages },
+      { attempt, compacted, model: ref, cutoff, messages, hooks },
       outcome,
     )
   })
@@ -108,6 +132,7 @@ export const pollPhase = (env: Env) => (task: Phase<'poll'>, runtime: Generation
     if (env.model.info(ref) === undefined) return yield* failNoModel(runtime, ref)
     yield* sleepUntil(pollAt)
     const outcome = yield* Effect.result(env.model.poll(ref, handle))
-    const request = { attempt, compacted, model: ref, cutoff, pollAt }
+    const hooks = Agent.hooks(yield* agentOf(env, runtime), Hooks)
+    const request = { attempt, compacted, model: ref, cutoff, pollAt, hooks }
     return yield* classify(runtime, env, request, outcome)
   })

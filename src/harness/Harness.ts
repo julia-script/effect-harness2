@@ -26,6 +26,7 @@ import type { Registry } from '../task/Registry.ts'
 import { Scheduler } from '../task/Scheduler.ts'
 import type { Service as SchedulerService } from '../task/Scheduler.ts'
 import type { Conversation, CreateOptions, Init } from './Conversation.ts'
+import type { Extensions } from './Extensions.ts'
 import * as internal from './internal/harness.ts'
 import type { AbortResult, Submission } from './Submission.ts'
 
@@ -81,22 +82,25 @@ export class Harness extends Context.Service<Harness, Service>()(
 ) {}
 
 /**
- * Open a Harness over the `Storage` and task `Registry` in context: a Session and a Scheduler
+ * Open a Harness over the `Storage`, task `Registry` and `Extensions` in context: a Session and a Scheduler
  * with the Harness hooks. Run settings come from `Settings.Current`. Closing the scope closes them; pending submission waits fail.
  */
 export const makeWith: (
   options: Options,
-) => Effect.Effect<Service, CommitError, Storage | Registry | Scope.Scope> = internal.make
+) => Effect.Effect<Service, CommitError, Storage | Registry | Extensions | Scope.Scope> =
+  internal.make
 
 /** `makeWith` with the default options. */
-export const make: Effect.Effect<Service, CommitError, Storage | Registry | Scope.Scope> = makeWith(
-  {},
-)
+export const make: Effect.Effect<
+  Service,
+  CommitError,
+  Storage | Registry | Extensions | Scope.Scope
+> = makeWith({})
 
 /** A `Harness`, with its `Session` and `Scheduler`, over the provided Storage and Registry. */
 export const layerWith = (
   options: Options,
-): Layer.Layer<Harness | Session | Scheduler, CommitError, Storage | Registry> =>
+): Layer.Layer<Harness | Session | Scheduler, CommitError, Storage | Registry | Extensions> =>
   Layer.effectContext(
     Effect.map(makeWith(options), (harness) =>
       Context.make(Harness, harness).pipe(
@@ -107,5 +111,8 @@ export const layerWith = (
   )
 
 /** `layerWith` with the default options. */
-export const layer: Layer.Layer<Harness | Session | Scheduler, CommitError, Storage | Registry> =
-  layerWith({})
+export const layer: Layer.Layer<
+  Harness | Session | Scheduler,
+  CommitError,
+  Storage | Registry | Extensions
+> = layerWith({})

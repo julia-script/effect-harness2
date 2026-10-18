@@ -62,6 +62,11 @@ export interface Tool<
    */
   readonly replay: 'safe' | 'unsafe'
   readonly outputLimits: OutputLimits
+  /**
+   * Not offered to the model until a conversation loads it, as `tool_search` does; until then a
+   * conversation's agent lists it as deferred.
+   */
+  readonly deferred: boolean
 }
 
 /** Any declared tool, with its types erased. */
@@ -82,6 +87,7 @@ interface Options<Params, Ok, Err, Cfg> {
   readonly config?: Cfg
   readonly replay?: 'safe' | 'unsafe'
   readonly outputLimits?: Partial<OutputLimits>
+  readonly deferred?: boolean
 }
 
 /** Declare a tool. Without `success` it returns nothing, without `failure` it never fails. */
@@ -103,6 +109,7 @@ export function make(name: string, options: Options<Codec, Codec, Codec, Codec>)
     config: options.config ?? NoConfig,
     replay: options.replay ?? 'unsafe',
     outputLimits: { ...defaultOutputLimits, ...options.outputLimits },
+    deferred: options.deferred ?? false,
   }
 }
 

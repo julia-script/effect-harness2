@@ -30,6 +30,15 @@ export type Diagnostic = typeof Diagnostic.Type
 export const Data = Schema.Struct({ diagnostics: Schema.Array(Diagnostic) })
 export type Data = typeof Data.Type
 
+/**
+ * What a call asks of its generation once its round ends: `addTools` loads tools by name into the
+ * conversation's offered tools, so the next request offers them.
+ */
+export const Control = Schema.Struct({
+  addTools: Schema.optionalKey(Schema.Array(Schema.String)),
+})
+export type Control = typeof Control.Type
+
 /** What a call returns to the model. */
 export interface Result {
   readonly output: Content
@@ -37,6 +46,7 @@ export interface Result {
   readonly diagnostics: ReadonlyArray<Diagnostic>
   /** Detail for programs and the UI, such as a diff; the model does not see it. */
   readonly details?: Schema.Json
+  readonly control?: Control
 }
 
 /**
@@ -49,26 +59,27 @@ export const Output = Schema.Struct({
   content: Schema.Array(Schema.Union([TextContent, ImageContent])),
   diagnostics: Schema.optionalKey(Schema.Array(Diagnostic)),
   details: Schema.optionalKey(Schema.Json),
+  control: Schema.optionalKey(Control),
 })
 export type Output = typeof Output.Type
 
+/** What an `Output` holds besides its content. */
+export interface Options {
+  readonly diagnostics?: ReadonlyArray<Diagnostic>
+  readonly details?: Schema.Json
+  readonly control?: Control
+}
+
 /** An `Output` with `content`. */
-export const output = (
-  content: Content,
-  options: {
-    readonly diagnostics?: ReadonlyArray<Diagnostic>
-    readonly details?: Schema.Json
-  } = {},
-): Output => ({ type: 'pi.tool-output', content, ...options })
+export const output = (content: Content, options: Options = {}): Output => ({
+  type: 'pi.tool-output',
+  content,
+  ...options,
+})
 
 /** An `Output` of one text block. */
-export const text = (
-  value: string,
-  options: {
-    readonly diagnostics?: ReadonlyArray<Diagnostic>
-    readonly details?: Schema.Json
-  } = {},
-): Output => output(value === '' ? [] : [{ type: 'text', text: value }], options)
+export const text = (value: string, options: Options = {}): Output =>
+  output(value === '' ? [] : [{ type: 'text', text: value }], options)
 
 /** An error diagnostic. */
 export const error = (code: string, message: string): Diagnostic => ({

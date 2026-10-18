@@ -116,7 +116,7 @@ const prepare = (
     const shown = replaySections(view.messages)
     const { conversationId } = runtime
     const desired = yield* renderSections({ conversationId, agent, read: runtime }, shown)
-    const tools = agent.tools.map(({ tool }) => Tool.definition(tool))
+    const tools = agent.offered.map(({ tool }) => Tool.definition(tool))
     const entries = planSystemEntries(view, desired, tools, yield* Clock.currentTimeMillis)
     const settings = yield* env.settings
     const planned = entries.flatMap((entry) => decodeAll(entry.model ?? []))

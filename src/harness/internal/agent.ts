@@ -8,7 +8,7 @@ import type { ConversationId } from '../../storage/schema/Ids.ts'
 import type * as ToolTask from '../../tool/ToolTask.ts'
 import { document } from '../Agent.ts'
 import type { Resolved } from '../Agent.ts'
-import type { Selection, State, ToolFilter } from '../AgentState.ts'
+import type { ModelTools, Selection, State, ToolFilter } from '../AgentState.ts'
 import type { Section } from '../Extension.ts'
 import type { Installed, Service as Extensions, Snapshot } from '../Extensions.ts'
 import type { Settings } from '../Settings.ts'
@@ -51,6 +51,48 @@ const filter = (
   const removed = new Set(stored.remove)
   return tools.filter(({ tool }) => !removed.has(tool.name))
 }
+
+/** The enabled tools the model is offered, as `modelTools` selects them. */
+const offer = (
+  tools: ReadonlyArray<ToolTask.Installed>,
+  stored: ModelTools | undefined,
+): ReadonlyArray<ToolTask.Installed> => {
+  if (stored !== undefined && isList(stored)) return filter(tools, stored)
+  const removed = new Set(stored?.remove ?? [])
+  const kept = tools.filter(({ tool }) => !tool.deferred && !removed.has(tool.name))
+  // Loaded tools follow in load order, so loading one appends to the declared tools.
+  const loaded = [...new Set(stored?.add ?? [])].flatMap((name) => {
+    const found = tools.find(({ tool }) => tool.name === name)
+    return found?.tool.deferred === true && !removed.has(name) ? [found] : []
+  })
+  return [...kept, ...loaded]
+}
+
+/** `names` appended to `list` where it lacks them. */
+const appended = (list: ReadonlyArray<string>, names: ReadonlyArray<string>) => [
+  ...list,
+  ...names.filter((name, index) => !list.includes(name) && names.indexOf(name) === index),
+]
+
+/** Load `names` into the conversation's offered tools (see `Agent.addTools`). */
+export const addTools = (
+  tx: Session.Tx,
+  conversationId: ConversationId,
+  names: ReadonlyArray<string>,
+) =>
+  Effect.map(tx.doc(document, conversationId), (state) => {
+    const { tools, modelTools } = state
+    if (tools !== undefined && isList(tools)) state.tools = appended(tools, names)
+    else if (tools?.remove.some((name) => names.includes(name)) === true)
+      state.tools = { remove: tools.remove.filter((name) => !names.includes(name)) }
+    if (modelTools !== undefined && isList(modelTools)) {
+      state.modelTools = appended(modelTools, names)
+      return
+    }
+    const remove = (modelTools?.remove ?? []).filter((name) => !names.includes(name))
+    const add = appended(modelTools?.add ?? [], names)
+    state.modelTools = remove.length === 0 ? { add } : { remove, add }
+  })
 
 const renamed = (target: string, name: string) =>
   Effect.logWarning(`A wrapper renamed ${target} to ${name}; ${target} is left out`)
@@ -105,6 +147,8 @@ export const resolve = (state: State | undefined, snapshot: Snapshot, settings: 
       const { name } = tool.tool
       enabled.push(Object.hasOwn(config, name) ? { ...tool, config: config[name] } : tool)
     }
+    const offered = offer(enabled, state?.modelTools)
+    const deferred = enabled.filter((each) => each.tool.deferred && !offered.includes(each))
     const instructions = state?.instructions
     const agentSections = [...sections.values()]
     if (instructions !== undefined)
@@ -115,6 +159,8 @@ export const resolve = (state: State | undefined, snapshot: Snapshot, settings: 
       reasoning: state?.reasoning ?? settings.reasoning ?? 'off',
       extensions,
       tools: enabled,
+      offered,
+      deferred,
       sections: agentSections,
       ...(instructions === undefined ? {} : { instructions }),
     }

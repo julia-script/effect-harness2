@@ -4,14 +4,17 @@
 import { Clock, Effect, Result } from 'effect'
 import type { AssistantMessage, Message } from '../../../model/Message.ts'
 import type * as Model from '../../../model/Model.ts'
-import { Retryable, UnknownModel } from '../../../model/ModelError.ts'
+import { ContextOverflow, Retryable, UnknownModel } from '../../../model/ModelError.ts'
 import type { ModelError } from '../../../model/ModelError.ts'
 import * as Transcript from '../../../model/Transcript.ts'
-import type { EntryId } from '../../../storage/schema/Ids.ts'
+import type { EntryId, TaskId } from '../../../storage/schema/Ids.ts'
 import * as Live from '../../Live.ts'
-import { retryDelayMs } from '../../Settings.ts'
+import { compactionFor, retryDelayMs } from '../../Settings.ts'
+import { selectCut } from '../compaction/select.ts'
+import { createCompaction } from '../compaction/status.ts'
 import { prepareBoundary } from '../inbox.ts'
 import { appendAssistant, endRun, finishRun } from '../run.ts'
+import { readView } from './env.ts'
 import type { Env, GenerationRuntime, Next } from './env.ts'
 import { startToolRound } from './round.ts'
 
@@ -20,6 +23,7 @@ const DEFAULT_POLL_AFTER_MS = 5000
 /** What classification needs of the request that produced a response. */
 export interface Request {
   readonly attempt: number
+  readonly compacted?: TaskId | undefined
   readonly model: Model.Ref
   readonly cutoff: EntryId
   /** The context through `cutoff`, when the phase already read it. */
@@ -94,21 +98,73 @@ const poll = (runtime: GenerationRuntime, request: Request, message: AssistantMe
         live.generation = { attempt, deferred: { pollAt } }
         const next: Next = {
           status: 'running',
-          checkpoint: { phase: 'poll', attempt, model, cutoff, handle, pollAt },
+          checkpoint: {
+            phase: 'poll',
+            attempt,
+            ...compactedOf(request),
+            model,
+            cutoff,
+            handle,
+            pollAt,
+          },
         }
         return next
       }),
     )
   })
 
+/** The `compacted` field of a checkpoint after `request`. */
+const compactedOf = (request: Request) =>
+  request.compacted === undefined ? {} : { compacted: request.compacted }
+
 /**
- * A failed request: an unknown model ends the run `no_model`; a `Retryable` failure waits and
- * tries again while the retry policy allows; anything else ends the run `model_error`. The
- * policy is read now, since it governs the next attempt.
+ * A context overflow, once per generation: when there is something to compact, keep the failed
+ * response, compact with a compaction the generation owns, and prepare again. Returns whether it
+ * did.
  */
-const failed = (runtime: GenerationRuntime, env: Env, request: Request, error: ModelError) =>
+const compactOnOverflow = (
+  runtime: GenerationRuntime,
+  env: Env,
+  request: Request,
+  error: ModelError,
+) =>
   Effect.gen(function* () {
-    if (error.reason instanceof UnknownModel) return yield* failNoModel(runtime, request.model)
+    const policy = compactionFor(yield* env.settings, request.model)
+    if (request.compacted !== undefined || !policy.enabled) return false
+    const view = yield* readView(runtime, request.cutoff)
+    if (selectCut(view, policy.keepRecentTokens) === undefined) return false
+    const { conversationId } = runtime
+    yield* runtime.commit((tx) =>
+      Effect.gen(function* () {
+        const live = yield* tx.doc(Live.document, conversationId)
+        if (error.response !== undefined) yield* appendAssistant(tx, conversationId, error.response)
+        delete live.generation
+        const child = yield* createCompaction(
+          tx,
+          conversationId,
+          { reason: 'overflow' },
+          runtime.taskId,
+        )
+        const next: Next = {
+          status: 'waiting',
+          checkpoint: {
+            phase: 'prepare',
+            attempt: request.attempt,
+            compacted: child,
+            overflow: error.message,
+          },
+          on: [child],
+          policy: 'allSettled',
+        }
+        return next
+      }),
+    )
+    return true
+  })
+
+/** Retry a `Retryable` failure while the policy allows; end the run `model_error` otherwise. */
+const retryOrFail = (runtime: GenerationRuntime, env: Env, request: Request, error: ModelError) =>
+  Effect.gen(function* () {
     const { retry } = yield* env.settings
     const { attempt } = request
     if (!(error.reason instanceof Retryable && retry.enabled && attempt <= retry.maxRetries))
@@ -121,11 +177,27 @@ const failed = (runtime: GenerationRuntime, env: Env, request: Request, error: M
         if (error.response !== undefined)
           yield* appendAssistant(tx, runtime.conversationId, error.response)
         live.generation = { attempt, retry: { at: until, error: error.message } }
-        const next: Next = { status: 'running', checkpoint: { phase: 'retry', attempt, until } }
+        const next: Next = {
+          status: 'running',
+          checkpoint: { phase: 'retry', attempt, ...compactedOf(request), until },
+        }
         return next
       }),
     )
   })
+
+/**
+ * A failed request: an unknown model ends the run `no_model`; a context overflow compacts; a
+ * `Retryable` failure waits and tries again while the retry policy allows; anything else ends the
+ * run `model_error`. The policies are read now, since they govern the next attempt.
+ */
+const failed = (runtime: GenerationRuntime, env: Env, request: Request, error: ModelError) => {
+  if (error.reason instanceof UnknownModel) return failNoModel(runtime, request.model)
+  if (!(error.reason instanceof ContextOverflow)) return retryOrFail(runtime, env, request, error)
+  return Effect.flatMap(compactOnOverflow(runtime, env, request, error), (compacted) =>
+    compacted ? Effect.void : retryOrFail(runtime, env, request, error),
+  )
+}
 
 /** Classify a request's outcome in one commit that also replaces the partial. */
 export const classify = (

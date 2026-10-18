@@ -92,7 +92,13 @@ const conversations = (
   harness: Service,
 ): Pick<
   Handlers,
-  'HasConversation' | 'Submit' | 'Reset' | 'Entries' | 'AbortConversation' | 'WaitForIdle'
+  | 'HasConversation'
+  | 'Submit'
+  | 'Reset'
+  | 'Compact'
+  | 'Entries'
+  | 'AbortConversation'
+  | 'WaitForIdle'
 > => ({
   HasConversation: ({ conversationId }) =>
     Effect.map(harness.conversation(conversationId), (found) => found !== undefined),
@@ -104,6 +110,8 @@ const conversations = (
     withConversation(harness, conversationId, (conversation) =>
       Effect.map(conversation.reset(handoff), ({ id }) => id),
     ),
+  Compact: ({ conversationId, instructions }) =>
+    withConversation(harness, conversationId, (conversation) => conversation.compact(instructions)),
   Entries: ({ conversationId, query, limit, cursor }) =>
     withConversation(harness, conversationId, (conversation) =>
       conversation.entries(query, limit, cursor),

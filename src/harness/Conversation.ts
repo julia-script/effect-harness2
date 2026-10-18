@@ -6,7 +6,7 @@ import type { Effect } from 'effect'
 import type { ConversationOwnership, TransactionScope, Tx } from '../session/Session.ts'
 import type { CommitError } from '../session/SessionError.ts'
 import type { EntryRecord } from '../storage/schema/Entry.ts'
-import type { ConversationId, EntryId } from '../storage/schema/Ids.ts'
+import type { ConversationId, EntryId, TaskId } from '../storage/schema/Ids.ts'
 import type { Cursor, EntryQuery, Page } from '../storage/schema/Scan.ts'
 import type { StorageError } from '../storage/StorageError.ts'
 import type { SchedulerClosed, TaskNotFound } from '../task/TaskError.ts'
@@ -56,6 +56,12 @@ export interface Conversation {
    * given; while busy, it is placed at the next boundary.
    */
   readonly reset: (handoff?: string) => Effect.Effect<Submission, CommitError>
+  /**
+   * Start a manual compaction and return its task. It summarizes while the conversation keeps
+   * working, and places its summary through a write submission: at once when idle, otherwise at
+   * the next boundary.
+   */
+  readonly compact: (instructions?: string) => Effect.Effect<TaskId, CommitError>
   /** A Session commit whose `tx.createTask()` defaults to this conversation. */
   readonly commit: <A, E, R>(
     change: (tx: Tx) => Effect.Effect<A, E, R>,

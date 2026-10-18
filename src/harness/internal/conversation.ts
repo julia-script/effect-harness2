@@ -7,6 +7,7 @@ import type { TxDocumentError, TxReadError } from '../../session/SessionError.ts
 import type { ConversationRecord } from '../../storage/schema/Conversation.ts'
 import { ROOT_CONVERSATION_ID } from '../../storage/schema/Ids.ts'
 import type { ConversationId, EntryId } from '../../storage/schema/Ids.ts'
+import { createCompaction } from './compaction/status.ts'
 import type { Service as SchedulerService } from '../../task/Scheduler.ts'
 import type { Conversation, CreateOptions, Init } from '../Conversation.ts'
 import { RESET_KIND } from './inbox.ts'
@@ -84,6 +85,13 @@ export const conversation = (host: Host, id: ConversationId): Conversation => ({
         },
       }),
     ).pipe(Effect.catchTags({ ConversationBusy: Effect.die, InvalidSubmission: Effect.die })),
+  compact: (instructions) =>
+    host.session.commit((tx) =>
+      createCompaction(tx, id, {
+        reason: 'manual',
+        ...(instructions === undefined ? {} : { instructions }),
+      }),
+    ),
   commit: (change, scope) => host.session.commit(change, { ...scope, conversationId: id }),
   entries: (query, limit, cursor) =>
     readsFirst(

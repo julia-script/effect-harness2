@@ -13,7 +13,7 @@ import type { AbortResult, Draft, Settled } from '../harness/Submission.ts'
 import type { CommitError } from '../session/SessionError.ts'
 import type { ConversationOwnership } from '../storage/schema/Conversation.ts'
 import type { EntryRecord } from '../storage/schema/Entry.ts'
-import type { ConversationId, EntryId, SubmissionId } from '../storage/schema/Ids.ts'
+import type { ConversationId, EntryId, SubmissionId, TaskId } from '../storage/schema/Ids.ts'
 import type { Cursor, Page } from '../storage/schema/Scan.ts'
 import type { SubmissionRecord } from '../storage/schema/Submission.ts'
 import type { StorageError } from '../storage/StorageError.ts'
@@ -50,6 +50,8 @@ export interface Conversation {
   ) => Effect.Effect<Submission, Failure<ConversationBusy | InvalidSubmission>>
   /** Start fresh context at a `pi.reset` entry, with optional handoff text. */
   readonly reset: (handoff?: string) => Effect.Effect<Submission, Failure>
+  /** Start a manual compaction; its summary is placed at the next boundary, or at once when idle. */
+  readonly compact: (instructions?: string) => Effect.Effect<TaskId, Failure>
   readonly entries: (
     query: ConversationEntryQuery,
     limit: number,
@@ -126,6 +128,11 @@ const conversationHandle = (rpcs: Rpcs, id: ConversationId): Conversation => ({
       rpcs.Reset({ conversationId: id, ...(handoff === undefined ? {} : { handoff }) }),
       (submissionId) => submissionHandle(rpcs, submissionId),
     ),
+  compact: (instructions) =>
+    rpcs.Compact({
+      conversationId: id,
+      ...(instructions === undefined ? {} : { instructions }),
+    }),
   entries: (query, limit, cursor) =>
     rpcs.Entries({ conversationId: id, query, limit, ...(cursor === undefined ? {} : { cursor }) }),
   fork: (at, { ownership, init }) =>

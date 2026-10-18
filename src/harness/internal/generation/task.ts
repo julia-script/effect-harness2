@@ -2,17 +2,14 @@
  * The generation task: its phases and abort handler.
  */
 import { Clock, Effect } from 'effect'
-import * as Tool from '../../../tool/Tool.ts'
 import * as ToolResult from '../../../tool/ToolResult.ts'
 import type { Definition, RunningTask } from '../../../task/Task.ts'
 import type { Checkpoint, Result } from '../../Generation.ts'
-import { EmptyConversation } from '../../GenerationError.ts'
 import * as Live from '../../Live.ts'
-import { planSystemEntries, renderSections, replaySections } from '../prompt.ts'
 import { convertPartial, endRun, RUN_KIND } from '../run.ts'
-import { failNoModel } from './classify.ts'
-import { readView, sleepUntil } from './env.ts'
+import { sleepUntil } from './env.ts'
 import type { Env, GenerationRuntime, Next } from './env.ts'
+import { preparePhase } from './prepare.ts'
 import { pollPhase, requestPhase } from './request.ts'
 import { readCalls, toolsPhase } from './round.ts'
 
@@ -20,49 +17,10 @@ type Phase<P extends Checkpoint['phase']> = {
   readonly state: { readonly checkpoint: Extract<Checkpoint, { readonly phase: P }> }
 }
 
-/**
- * The `prepare` phase: render the system prompt and tool declarations, append the `pi.system`
- * entries they need, and fix the request. Only the Harness writes model context to a busy
- * conversation, so the context read here is still current at the commit.
- */
-const preparePhase = (env: Env) => (task: Phase<'prepare'>, runtime: GenerationRuntime) =>
-  Effect.gen(function* () {
-    const { conversationId } = runtime
-    const { attempt } = task.state.checkpoint
-    const agent = yield* env.agent
-    const ref = agent.model
-    if (ref === undefined || env.model.info(ref) === undefined)
-      return yield* failNoModel(runtime, ref)
-    const view = yield* readView(runtime)
-    const shown = replaySections(view.messages)
-    const desired = yield* renderSections(agent.sections ?? [], conversationId, shown)
-    const tools = (agent.tools ?? []).map((tool) => Tool.definition(tool))
-    const entries = planSystemEntries(view, desired, tools, yield* Clock.currentTimeMillis)
-    const { stream } = yield* env.settings
-    const reasoning = agent.reasoning ?? 'off'
-    const options = reasoning === 'off' ? stream : { ...stream, reasoning }
-    return yield* runtime.commit((tx) =>
-      Effect.gen(function* () {
-        let cutoff = (yield* tx.scanEntries({ conversationId }, 1)).items[0]?.id
-        for (const entry of entries) cutoff = (yield* tx.appendEntry(conversationId, entry)).id
-        if (cutoff === undefined)
-          return yield* new EmptyConversation({
-            message: `Conversation ${conversationId} has no entries to send`,
-            conversationId,
-          })
-        const next: Next = {
-          status: 'running',
-          checkpoint: { phase: 'request', attempt, model: ref, options, cutoff },
-        }
-        return next
-      }),
-    )
-  })
-
 /** The `retry` phase: wait out the backoff, then prepare the next attempt. */
 const retryPhase = (task: Phase<'retry'>, runtime: GenerationRuntime) =>
   Effect.gen(function* () {
-    const { attempt, until } = task.state.checkpoint
+    const { attempt, until, compacted } = task.state.checkpoint
     yield* sleepUntil(until)
     yield* runtime.commit((tx) =>
       Effect.gen(function* () {
@@ -70,7 +28,11 @@ const retryPhase = (task: Phase<'retry'>, runtime: GenerationRuntime) =>
         live.generation = { attempt: attempt + 1 }
         const next: Next = {
           status: 'running',
-          checkpoint: { phase: 'prepare', attempt: attempt + 1 },
+          checkpoint: {
+            phase: 'prepare',
+            attempt: attempt + 1,
+            ...(compacted === undefined ? {} : { compacted }),
+          },
         }
         return next
       }),

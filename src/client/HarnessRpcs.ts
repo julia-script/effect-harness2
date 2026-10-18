@@ -19,7 +19,7 @@ import {
 } from '../session/SessionError.ts'
 import { ConversationOwnership } from '../storage/schema/Conversation.ts'
 import { EntryRecord } from '../storage/schema/Entry.ts'
-import { ConversationId, EntryId, SubmissionId } from '../storage/schema/Ids.ts'
+import { ConversationId, EntryId, SubmissionId, TaskId } from '../storage/schema/Ids.ts'
 import { Cursor, EntryQuery, Page } from '../storage/schema/Scan.ts'
 import { SubmissionRecord } from '../storage/schema/Submission.ts'
 import { StorageError, StorageRequestError } from '../storage/StorageError.ts'
@@ -90,6 +90,11 @@ export class HarnessRpcs extends RpcGroup.make(
   Rpc.make('Reset', {
     payload: { conversationId: ConversationId, handoff: Schema.optionalKey(Schema.String) },
     success: SubmissionId,
+    error: CommitError,
+  }),
+  Rpc.make('Compact', {
+    payload: { conversationId: ConversationId, instructions: Schema.optionalKey(Schema.String) },
+    success: TaskId,
     error: CommitError,
   }),
   Rpc.make('Entries', {

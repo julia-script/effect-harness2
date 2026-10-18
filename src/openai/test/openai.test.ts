@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines-per-function -- describe blocks */
 /**
  * The OpenAI provider against a local stand-in for the Responses API: the request it sends for the
  * catalog model and options, and the response it maps back.
@@ -6,75 +7,11 @@ import { describe, expect, test } from 'bun:test'
 import { Effect, Redacted } from 'effect'
 import { FetchHttpClient } from 'effect/http'
 import { Credentials } from '../../credentials/index.ts'
-import { Model } from '../../model/index.ts'
+import { Model, ModelError } from '../../model/index.ts'
 import type { Message } from '../../model/index.ts'
 import { serve } from '../../model/test/fakeApi.ts'
 import { OpenAi } from '../index.ts'
-
-const response = (status: string) => ({
-  id: 'resp_1',
-  object: 'response',
-  created_at: 1,
-  model: 'gpt-5',
-  status,
-  output: [],
-  metadata: null,
-  temperature: null,
-  top_p: null,
-  tools: [],
-  tool_choice: 'auto',
-  error: null,
-  incomplete_details: null,
-  instructions: null,
-  parallel_tool_calls: false,
-})
-
-const message = (status: string, text: string) => ({
-  type: 'message',
-  id: 'msg_1',
-  role: 'assistant',
-  status,
-  content: text === '' ? [] : [{ type: 'output_text', text, annotations: [] }],
-})
-
-const events = [
-  { type: 'response.created', sequence_number: 1, response: response('in_progress') },
-  {
-    type: 'response.output_item.added',
-    sequence_number: 2,
-    output_index: 0,
-    item: message('in_progress', ''),
-  },
-  {
-    type: 'response.output_text.delta',
-    sequence_number: 3,
-    item_id: 'msg_1',
-    output_index: 0,
-    content_index: 0,
-    delta: 'Hello',
-    logprobs: [],
-  },
-  {
-    type: 'response.output_item.done',
-    sequence_number: 4,
-    output_index: 0,
-    item: message('completed', 'Hello'),
-  },
-  {
-    type: 'response.completed',
-    sequence_number: 5,
-    response: {
-      ...response('completed'),
-      usage: {
-        input_tokens: 10,
-        output_tokens: 20,
-        total_tokens: 30,
-        input_tokens_details: { cached_tokens: 0 },
-        output_tokens_details: { reasoning_tokens: 0 },
-      },
-    },
-  },
-]
+import { events } from './support.ts'
 
 const user = (text: string): Message.Message => ({ role: 'user', content: text, timestamp: 0 })
 
@@ -135,5 +72,56 @@ describe('OpenAi.provider', () => {
           ])
         }),
       ).pipe(Effect.provide([FetchHttpClient.layer, Credentials.layerMemory()]), Effect.orDie),
+    ))
+
+  test('listModels lists what the stored key reaches, marking what the provider serves', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const api = yield* serve(() => ({
+            json: { object: 'list', data: [{ id: 'gpt-5.5' }, { id: 'gpt-next' }] },
+          }))
+          const store = yield* Credentials.Credentials
+          yield* store.set('openai-team', { type: 'api_key', key: Redacted.make('sk-team') })
+          const provider = OpenAi.provider({ name: 'openai-team', apiUrl: `${api.url}/v1` })
+          const listed = yield* provider.listModels
+          expect(api.requests[0]).toMatchObject({
+            path: '/v1/models',
+            headers: { authorization: 'Bearer sk-team' },
+          })
+          expect(listed).toEqual([
+            {
+              provider: 'openai-team',
+              id: 'gpt-5.5',
+              name: 'GPT-5.5',
+              served: true,
+              thinkingLevels: ['off', 'low', 'medium', 'high', 'xhigh'],
+              serviceTiers: [],
+              contextWindow: 272_000,
+            },
+            {
+              provider: 'openai-team',
+              id: 'gpt-next',
+              name: 'gpt-next',
+              served: false,
+              serviceTiers: [],
+            },
+          ])
+        }),
+      ).pipe(Effect.provide([FetchHttpClient.layer, Credentials.layerMemory()]), Effect.orDie),
+    ))
+
+  test('listModels fails Rejected on a refused key', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const api = yield* serve(() => ({ status: 401, json: { error: { message: 'bad key' } } }))
+          const provider = OpenAi.provider({ apiKey: Redacted.make('sk-bad'), apiUrl: api.url })
+          const error = yield* Effect.flip(provider.listModels)
+          expect(error.reason).toBeInstanceOf(ModelError.Rejected)
+          expect(error.message).toContain('401')
+        }),
+        // oxlint-disable-next-line effecttsgo/strict-effect-provide -- each test is an entry point
+      ).pipe(Effect.provide(FetchHttpClient.layer)),
     ))
 })

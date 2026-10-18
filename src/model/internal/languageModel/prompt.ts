@@ -60,9 +60,14 @@ const messageOf = (message: Message): ReadonlyArray<Prompt.MessageEncoded> => {
   }
 }
 
-/** The prompt for `messages`. */
-export const prompt = (messages: ReadonlyArray<Message>): ReadonlyArray<Prompt.MessageEncoded> =>
-  Transcript.collapse(messages).flatMap((message) => messageOf(message))
+/** The prompt for `messages`; without `system`, it leaves the system message out. */
+export const prompt = (
+  messages: ReadonlyArray<Message>,
+  system = true,
+): ReadonlyArray<Prompt.MessageEncoded> =>
+  Transcript.collapse(messages).flatMap((message) =>
+    message.role === 'system' && !system ? [] : messageOf(message),
+  )
 
 const declare = (definition: ToolDefinition) =>
   Tool.dynamic(definition.name, {

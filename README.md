@@ -303,6 +303,43 @@ const Loop = HarnessServer.layer({
 provider without a key. `apiUrl` points one at a compatible server or a gateway, and `models`
 replaces its model list.
 
+Codex runs on a ChatGPT subscription. Sign in once from the client, which stores the tokens in
+`Credentials`; the provider refreshes them before they expire, so the store must be writable:
+
+```ts
+// client, once
+yield * OpenAiCodex.login({ onCode: ({ url, code }) => Console.log(`Open ${url}, enter ${code}`) })
+
+// loop
+Model.layer([OpenAiCodex.provider()]) // settings: { model: OpenAiCodex.ref('gpt-5.5') }
+```
+
+Each provider holds one account, named by `name`, which is also what its requests route by and
+its credential is stored under. For several accounts, give each provider its own name:
+
+```ts
+yield * OpenAiCodex.login({ name: 'codex-work', onCode })
+
+Model.layer([
+  OpenAiCodex.provider({ name: 'codex-work' }),
+  OpenAiCodex.provider({ name: 'codex-home' }),
+  OpenAi.provider({ name: 'openai-team' }), // reads the `openai-team` API key
+]) // settings: { model: OpenAiCodex.ref('gpt-5.5', 'codex-work') }
+```
+
+A stock provider also lists what its account reaches, over the same credentials: each model with
+the thinking levels it takes and, for Codex, its default level and service tiers. `served` says
+whether the provider routes requests to it.
+
+```ts
+const codex = OpenAiCodex.provider({ name: 'codex-work' })
+const listed = yield * codex.listModels // needs HttpClient and Credentials, like the provider
+// [{ id: 'gpt-5.5', thinkingLevels: ['low', 'medium', 'xhigh'], serviceTiers: [...], served: true }, ...]
+```
+
+Anthropic subscriptions (Claude Pro/Max) are not supported: pi uses them by identifying as Claude
+Code, which this harness does not do. Use an Anthropic API key.
+
 For any other backend, `LanguageModelProvider.make` adapts an effect/ai `LanguageModel`. Our
 loop runs the tools, so tool resolution is off; `languageModel` runs once per request.
 
@@ -413,7 +450,7 @@ tasks are all built this way.
 | `effect-harness/harness`     | `Harness`, `HarnessServer`, `Generation`, `Compaction`, `Extension(s)`, `Settings`, `ToolSearch` |
 | `effect-harness/tool`        | `Tool`, `Toolkit`, `ToolResult`, `Call`, `ToolTask`                                              |
 | `effect-harness/model`       | `Model`, `Message`, `LanguageModelProvider`, `Faux`                                              |
-| `effect-harness/openai`      | `OpenAi` provider and catalog                                                                    |
+| `effect-harness/openai`      | `OpenAi` and `OpenAiCodex` providers and catalogs                                                |
 | `effect-harness/anthropic`   | `Anthropic` provider and catalog                                                                 |
 | `effect-harness/credentials` | `Credentials`, `Credential`, `CredentialsRpcs`                                                   |
 | `effect-harness/coding`      | `CodingTools`, `CodingHandlers`                                                                  |

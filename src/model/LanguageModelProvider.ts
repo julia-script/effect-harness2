@@ -20,6 +20,11 @@ export interface Options<R = never> {
   readonly api: string
   readonly models: ReadonlyArray<Definition>
   /**
+   * Where the system prompt goes. Default `prompt`, as the prompt's first message; `separate`
+   * leaves it out, for an API that takes it as a request field the `languageModel` sets.
+   */
+  readonly system?: 'prompt' | 'separate'
+  /**
    * The `LanguageModel` for one request to `model`, configured from the request's options: read
    * the credential here. Its scope closes when the response ends.
    */
@@ -40,7 +45,7 @@ export const make = <R = never>(options: Options<R>): Provider<Exclude<R, Scope.
         const timestamp = yield* Clock.currentTimeMillis
         const parts = service
           .streamText({
-            prompt: prompt(request.messages),
+            prompt: prompt(request.messages, options.system !== 'separate'),
             toolkit: toolkit(request.messages),
             disableToolCallResolution: true,
             toolCallValidation: 'deferred',

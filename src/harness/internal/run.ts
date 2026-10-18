@@ -4,13 +4,18 @@
  */
 import { Effect } from 'effect'
 import type { Draft } from '../../delta/Tracker.ts'
+import type { AssistantMessage } from '../../model/Message.ts'
 import type { SubmissionSettlement, TaskKind, Tx } from '../../session/Session.ts'
 import type { ConversationId, EntryId, SubmissionId, TaskId } from '../../storage/schema/Ids.ts'
 import type { TaskRecord } from '../../storage/schema/Task.ts'
 import type { SchedulerOutcome } from '../../task/Scheduler.ts'
+import * as ToolTask from '../../tool/ToolTask.ts'
 import * as Live from '../Live.ts'
 import { applyBoundary } from './inbox.ts'
 import type { Boundary } from './inbox.ts'
+import { strictJson } from './json.ts'
+
+export const ASSISTANT_KIND = 'pi.assistant'
 
 /** The task kind that takes `pi.live.run`: the built-in generation task. */
 export const RUN_KIND = 'pi.generation'
@@ -36,18 +41,67 @@ export const startRun = Effect.fnUntraced(function* (
   live.run = { taskId: yield* createRunTask(tx, conversationId), inputs: [...inputs] }
 })
 
-/** End the run `taskId` owns: settle each of its inputs and remove `run`. */
+/**
+ * End the run `taskId` owns: settle each of its inputs and remove `run`. Always removes
+ * `generation` and `tools`, whose presentation belongs to the ending run.
+ */
 export const endRun = Effect.fnUntraced(function* (
   tx: Tx,
   live: Draft<Live.State>,
   taskId: TaskId,
   settlement: SubmissionSettlement,
 ) {
+  delete live.generation
+  delete live.tools
   const run = live.run
   if (run?.taskId !== taskId) return
   for (const id of run.inputs) yield* tx.settleSubmission(id, settlement)
   delete live.run
 })
+
+/** Append a model response as a `pi.assistant` entry. */
+export const appendAssistant = (
+  tx: Tx,
+  conversationId: ConversationId,
+  message: AssistantMessage,
+) => tx.appendEntry(conversationId, { kind: ASSISTANT_KIND, model: [strictJson({ ...message })] })
+
+/**
+ * Append the committed partial an interrupted, aborted, faulted or orphaned attempt left, as an
+ * aborted assistant entry, so the transcript keeps what the model produced. The caller replaces
+ * or removes `generation`.
+ */
+export const convertPartial = Effect.fnUntraced(function* (
+  tx: Tx,
+  live: Draft<Live.State>,
+  conversationId: ConversationId,
+) {
+  const partial = live.generation?.message
+  if (partial === undefined) return
+  // A plain copy: the draft's handles read empty once the commit settles.
+  const message: AssistantMessage = strictJson({ ...partial })
+  yield* appendAssistant(tx, conversationId, { ...message, stopReason: 'aborted' })
+})
+
+/** The slot of tool task `taskId` in the current round. */
+const slotOf = (live: Draft<Live.State>, taskId: TaskId) =>
+  live.tools?.find((slot) => slot.taskId === taskId)
+
+/** The tool task's hooks: its slot runs when the call starts, and is done with its result. */
+export const toolHooks: ToolTask.Hooks = {
+  started: (tx, call) =>
+    Effect.map(tx.doc(Live.document, call.conversationId), (live) => {
+      const slot = slotOf(live, call.taskId)
+      if (slot !== undefined) slot.status = 'running'
+    }),
+  settled: (tx, call, entry) =>
+    Effect.map(tx.doc(Live.document, call.conversationId), (live) => {
+      const slot = slotOf(live, call.taskId)
+      if (slot === undefined) return
+      slot.status = 'done'
+      slot.entry = entry
+    }),
+}
 
 /** Hand run control from `from` to `to`; the run's inputs move with it. */
 export const handOver = (live: Draft<Live.State>, from: TaskId, to: TaskId): void => {
@@ -92,6 +146,7 @@ export const continueRun = Effect.fnUntraced(function* (
     return live.run?.taskId
   }
   if (live.run?.taskId !== taskId) return live.run?.taskId
+  delete live.tools
   live.run.inputs.push(...users)
   const next = yield* createRunTask(tx, conversationId)
   handOver(live, taskId, next)
@@ -100,15 +155,24 @@ export const continueRun = Effect.fnUntraced(function* (
 
 /**
  * Cleanup for an outcome the scheduler writes itself (spec §5.4): a faulted or orphaned run task
- * ends its run `unanswered`. Other kinds are left alone, so it never creates `pi.live` elsewhere.
+ * ends its run `unanswered`, keeping its partial as an aborted entry; a tool task's slot is done
+ * without an entry, and context derivation synthesizes the missing result. Other kinds are left
+ * alone, so it never creates `pi.live` elsewhere.
  */
 export const settleOutcome = Effect.fnUntraced(function* (
   tx: Tx,
   record: TaskRecord,
   outcome: SchedulerOutcome,
 ) {
+  if (record.kind === ToolTask.name) {
+    const slot = slotOf(yield* tx.doc(Live.document, record.conversationId), record.id)
+    if (slot !== undefined) slot.status = 'done'
+    return
+  }
   if (record.kind !== RUN_KIND) return
   const live = yield* tx.doc(Live.document, record.conversationId)
+  if (live.run?.taskId !== record.id) return
+  yield* convertPartial(tx, live, record.conversationId)
   const settlement: SubmissionSettlement =
     outcome.status === 'faulted'
       ? { status: 'unanswered', reason: 'faulted', detail: outcome.error.message }

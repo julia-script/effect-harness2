@@ -11,7 +11,7 @@ import type { Definition, NextState, Runtime } from '../../task/Task.ts'
 import type { Any } from '../Tool.ts'
 import { CallNotFound } from '../ToolError.ts'
 import * as ToolResult from '../ToolResult.ts'
-import type { Checkpoint, Input, Result as TaskResult } from '../ToolTask.ts'
+import type { Checkpoint, Hooks, Input, Result as TaskResult } from '../ToolTask.ts'
 import { COMPLETED, execute, install } from './execute.ts'
 import type { Ending, Installed, Ran } from './execute.ts'
 
@@ -51,20 +51,27 @@ const terminal = (ending: Ending, result: TaskResult): NextState<Checkpoint, Tas
   return { status: 'terminal', outcome: { status: ending.status, result } }
 }
 
+/** The task as its hooks see it. */
+const callOf = (runtime: ToolRuntime) => ({
+  taskId: runtime.taskId,
+  conversationId: runtime.conversationId,
+})
+
 /** In one commit: append the call's result entry and end the task. */
-const settleIn = (tx: Tx, runtime: ToolRuntime, call: ToolCall, ran: Ran) =>
+const settleIn = (tx: Tx, runtime: ToolRuntime, hooks: Hooks, call: ToolCall, ran: Ran) =>
   Effect.gen(function* () {
     const timestamp = yield* Clock.currentTimeMillis
     const timing =
       ran.durationMs === undefined ? { timestamp } : { timestamp, durationMs: ran.durationMs }
     const entry = yield* ToolResult.append(tx, runtime.conversationId, call, ran.result, timing)
+    if (hooks.settled !== undefined) yield* hooks.settled(tx, callOf(runtime), entry.id)
     return terminal(ran.ending, { entryId: entry.id })
   })
 
 /** Settle with the call read on the line. */
-const settle = (runtime: ToolRuntime, input: Input, build: (call: ToolCall) => Ran) =>
+const settle = (runtime: ToolRuntime, hooks: Hooks, input: Input, build: (call: ToolCall) => Ran) =>
   runtime.commit((tx) =>
-    Effect.flatMap(readCall(tx, input), (call) => settleIn(tx, runtime, call, build(call))),
+    Effect.flatMap(readCall(tx, input), (call) => settleIn(tx, runtime, hooks, call, build(call))),
   )
 
 /** The call, read in a commit of its own. */
@@ -83,13 +90,13 @@ const currentCall = (runtime: ToolRuntime, input: Input) =>
 /** Run the handler on the arguments of intent, then settle. */
 const run = (
   runtime: ToolRuntime,
-  input: Input,
+  hooks: Hooks,
   call: ToolCall,
   installed: Installed,
   args: JsonObject,
 ) =>
   Effect.flatMap(execute(call, installed, args), (ran) =>
-    runtime.commit((tx) => settleIn(tx, runtime, call, ran)),
+    runtime.commit((tx) => settleIn(tx, runtime, hooks, call, ran)),
   )
 
 const encodeArguments = (tool: Any, params: unknown) =>
@@ -123,7 +130,7 @@ const prepare = (call: ToolCall, installed: Installed | undefined) =>
  * call cannot run, then run the handler.
  */
 const callPhase =
-  (tools: ReadonlyMap<string, Installed>) =>
+  (tools: ReadonlyMap<string, Installed>, hooks: Hooks) =>
   (task: { readonly input: Input }, runtime: ToolRuntime) =>
     Effect.gen(function* () {
       let intent:
@@ -134,8 +141,12 @@ const callPhase =
           const call = yield* readCall(tx, task.input)
           const prepared = yield* prepare(call, tools.get(call.name))
           if (!('args' in prepared))
-            return yield* settleIn(tx, runtime, call, { result: prepared, ending: COMPLETED })
+            return yield* settleIn(tx, runtime, hooks, call, {
+              result: prepared,
+              ending: COMPLETED,
+            })
           intent = { call, installed: prepared.installed, args: prepared.args }
+          if (hooks.started !== undefined) yield* hooks.started(tx, callOf(runtime))
           const { replay } = prepared.installed.tool
           return {
             status: 'running' as const,
@@ -144,12 +155,12 @@ const callPhase =
         }),
       )
       if (intent !== undefined)
-        yield* run(runtime, task.input, intent.call, intent.installed, intent.args)
+        yield* run(runtime, hooks, intent.call, intent.installed, intent.args)
     })
 
 /** The `execute` phase, reached only by recovery: rerun only when both policies say `safe`. */
 const executePhase =
-  (tools: ReadonlyMap<string, Installed>) =>
+  (tools: ReadonlyMap<string, Installed>, hooks: Hooks) =>
   (
     task: {
       readonly input: Input
@@ -162,10 +173,10 @@ const executePhase =
       const call = yield* currentCall(runtime, task.input)
       const installed = tools.get(call.name)
       if (replay === 'safe' && installed?.tool.replay === 'safe')
-        return yield* run(runtime, task.input, call, installed, args)
+        return yield* run(runtime, hooks, call, installed, args)
       const message = `Tool ${call.name} was interrupted and may have partially run`
       // `failed` records cancellation intent for what the call owns, now left unsupervised.
-      return yield* settle(runtime, task.input, () => ({
+      return yield* settle(runtime, hooks, task.input, () => ({
         result: ToolResult.failure('interrupted', message),
         ending: { status: 'failed', message },
       }))
@@ -186,15 +197,16 @@ export const definition = <Services>(
   tools: ReadonlyArray<Any>,
   implementations: Context.Context<Services>,
   config: Readonly<Record<string, unknown>>,
+  hooks: Hooks,
 ): Definition<Input, Checkpoint, TaskResult> => {
   const byName = install(tools, implementations, config)
   return {
     name: NAME,
     version: 1,
     initial: () => ({ phase: 'call' }),
-    phases: { call: callPhase(byName), execute: executePhase(byName) },
+    phases: { call: callPhase(byName, hooks), execute: executePhase(byName, hooks) },
     abort: (task, runtime) =>
-      settle(runtime, task.input, (call) => {
+      settle(runtime, hooks, task.input, (call) => {
         const [code, message] = abortCode(task, call.name)
         return { result: ToolResult.failure(code, message), ending: { status: 'aborted' } }
       }),

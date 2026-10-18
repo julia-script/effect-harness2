@@ -1,8 +1,8 @@
 /**
  * Test support: a Harness over memory storage, with a scripted stand-in for the generation task.
  *
- * The stand-in takes `pi.generation` runs until the built-in generation task is ported. Each run
- * task waits for the next scripted step: an answer ends the run at the final boundary, a tool
+ * The stand-in takes `pi.generation` runs where a test scripts the run itself rather than a model
+ * (`generationSupport.ts` runs the built-in task). Each run task waits for the next scripted step: an answer ends the run at the final boundary, a tool
  * round passes the `postTools` boundary and hands the run to a fresh task, and a failure faults
  * the task. Its abort handler ends the run `unanswered` with reason `aborted`.
  */
@@ -79,6 +79,11 @@ export const standIn = (steps: Queue.Queue<Step>, settings: Effect.Effect<Settin
       ),
   })
 
+/** Harness options, and the settings it runs with. */
+export interface Options extends Harness.Options {
+  readonly settings?: Settings.Input | Effect.Effect<Settings.Input>
+}
+
 export interface Opened {
   readonly harness: Harness.Service
   readonly steps: Queue.Queue<Step>
@@ -90,19 +95,17 @@ export interface Opened {
 /** Open a Harness over `storage` in the scope, with the stand-in installed. */
 export const open = (
   storage: StorageService,
-  options: Harness.Options = {},
+  options: Options = {},
   tasks: ReadonlyArray<Task.Any> = [],
 ): Effect.Effect<Opened, never, Scope.Scope> =>
   Effect.gen(function* () {
     const steps = yield* Queue.unbounded<Step>()
-    const input = options.settings
-    const settings = Effect.isEffect(input)
-      ? Effect.map(input, Settings.resolve)
-      : Effect.succeed(Settings.resolve(input))
+    const settings = Settings.make(options.settings ?? {})
     const registry = yield* Registry.make([standIn(steps, settings), ...tasks])
     const harness = yield* Harness.makeWith(options).pipe(
       Effect.provideService(Storage, storage),
       Effect.provideService(Registry.Registry, registry),
+      Effect.provideService(Settings.Current, settings),
     )
     const offer = (step: Step) => Effect.asVoid(Queue.offer(steps, step))
     const opened: Opened = {
@@ -116,7 +119,7 @@ export const open = (
   }).pipe(Effect.orDie)
 
 /** `open` in a scope of its own, closed by `close`: a later `open` over `storage` reopens. */
-export const openClosable = (storage: StorageService, options: Harness.Options = {}) =>
+export const openClosable = (storage: StorageService, options: Options = {}) =>
   Effect.gen(function* () {
     const scope = yield* Scope.make()
     const opened = yield* Scope.provide(open(storage, options), scope)

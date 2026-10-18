@@ -19,12 +19,6 @@ import { readsFirst } from './submissions.ts'
 
 const SCAN_PAGE_SIZE = 256
 
-/** The settings at this use. */
-const currentSettings = (input: Options['settings']): Effect.Effect<Settings.Settings> =>
-  Effect.isEffect(input)
-    ? Effect.map(input, Settings.resolve)
-    : Effect.succeed(Settings.resolve(input))
-
 /** The Session hook: the built-in documents of every new conversation, then the host's. */
 const sessionOptions = (options: Options): Session.Options => ({
   ...(options.documentRetention === undefined
@@ -66,7 +60,7 @@ export const make = Effect.fnUntraced(function* (options: Options) {
   const scheduler: Scheduler.Service = yield* Scheduler.makeWith(schedulerOptions).pipe(
     Effect.provideService(Session.Session, session),
   )
-  const submissions = yield* Submissions.make(session, currentSettings(options.settings))
+  const submissions = yield* Submissions.make(session, yield* Settings.Current)
   const host: Host = { session, scheduler, submissions }
   const service: Service = {
     session,

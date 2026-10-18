@@ -27,7 +27,6 @@ import { Scheduler } from '../task/Scheduler.ts'
 import type { Service as SchedulerService } from '../task/Scheduler.ts'
 import type { Conversation, CreateOptions, Init } from './Conversation.ts'
 import * as internal from './internal/harness.ts'
-import type * as Settings from './Settings.ts'
 import type { AbortResult, Submission } from './Submission.ts'
 
 /** Live work: scheduling state, every live task, and the queued and placed submissions. */
@@ -36,8 +35,6 @@ export type Inspection = Rpcs.Inspection
 
 /** How a Harness runs. */
 export interface Options {
-  /** Run settings, or an Effect read at every use; absent fields take their defaults. */
-  readonly settings?: Settings.Input | Effect.Effect<Settings.Input>
   /**
    * Runs in every commit that creates or forks a conversation, raw `tx.createConversation()`
    * included, after the built-in documents and before `init`.
@@ -85,7 +82,7 @@ export class Harness extends Context.Service<Harness, Service>()(
 
 /**
  * Open a Harness over the `Storage` and task `Registry` in context: a Session and a Scheduler
- * with the Harness hooks. Closing the scope closes them; pending submission waits fail.
+ * with the Harness hooks. Run settings come from `Settings.Current`. Closing the scope closes them; pending submission waits fail.
  */
 export const makeWith: (
   options: Options,

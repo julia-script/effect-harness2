@@ -24,8 +24,10 @@
  */
 import { Effect, Layer, Schema } from 'effect'
 import type { Context } from 'effect'
-import type { TaskKind } from '../session/Session.ts'
+import type { TaskKind, Tx } from '../session/Session.ts'
+import type { TxDocumentError } from '../session/SessionError.ts'
 import { EntryId } from '../storage/schema/Ids.ts'
+import type { ConversationId, TaskId } from '../storage/schema/Ids.ts'
 import { JsonObject } from '../storage/schema/Json.ts'
 import { Registry } from '../task/Registry.ts'
 import * as Task from '../task/Task.ts'
@@ -69,8 +71,24 @@ export type Config<Tools extends Record<string, Tool.Any>> = {
   readonly [Name in keyof Tools]?: Tools[Name]['config']['Encoded']
 }
 
+/** The tool task of a call, as its hooks see it. */
+export interface Call {
+  readonly taskId: TaskId
+  readonly conversationId: ConversationId
+}
+
+/**
+ * Run in the tool task's own commits, so the loop can present the call: `started` when the call
+ * records intent and its handler is about to run, `settled` with its result entry.
+ */
+export interface Hooks {
+  readonly started?: (tx: Tx, call: Call) => Effect.Effect<void, TxDocumentError>
+  readonly settled?: (tx: Tx, call: Call, entry: EntryId) => Effect.Effect<void, TxDocumentError>
+}
+
 export interface Options<Tools extends Record<string, Tool.Any>> {
   readonly config?: Config<Tools>
+  readonly hooks?: Hooks
 }
 
 /** The tool task over the tools of `toolkit` and their `implementations`. */
@@ -80,7 +98,12 @@ export const make = <Tools extends Record<string, Tool.Any>>(
   options: Options<Tools> = {},
 ): ToolTask =>
   Task.make(
-    internal.definition(Object.values(toolkit.tools), implementations, options.config ?? {}),
+    internal.definition(
+      Object.values(toolkit.tools),
+      implementations,
+      options.config ?? {},
+      options.hooks ?? {},
+    ),
   )
 
 /** Install the tool task in the `Registry`, over the implementations `toolkit.toLayer()` provides. */

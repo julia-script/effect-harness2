@@ -526,13 +526,14 @@ it after a user or a workspace.
 export default class Agent extends Cloudflare.RpcDurableObject<Agent>()(
   'Agent',
   { schema: HarnessObject.Rpcs },
-  Effect.gen(function* () {
-    return Effect.succeed(
+  // At deploy time, the Effect each activation runs.
+  Effect.succeed(
+    Effect.succeed(
       HarnessObject.layer({ adapters }).pipe(
         Layer.provide([OpenAiCodex.layerAdapter(), OpenAi.layerAdapter, FetchHttpClient.layer]),
       ),
-    )
-  }),
+    ),
+  ),
 ) {}
 
 // worker.ts: /agents/<name> reaches the object of that name, with the token
@@ -558,6 +559,9 @@ Cloudflare evicts or resets it anyway, the next activation resumes the tasks fro
 any restart, and clients' watches open again. The pieces are also there on their own:
 `HarnessObject.layerStorage`, `HarnessObject.layerKeepAwake`, and the handler layers
 `HarnessServer.layerHandlers` and `Accounts.layerHandlers`.
+
+[`examples/cloudflare`](examples/cloudflare) is a stack to run with `alchemy dev` or deploy, with
+a command-line client.
 
 A Worker has no file system or processes, so the coding tools and code mode do not run there, and
 neither do the Bun and sharp image processors.

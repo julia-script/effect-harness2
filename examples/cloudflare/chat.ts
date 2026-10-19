@@ -29,7 +29,13 @@ const connect = Effect.gen(function* () {
   const { url, name, token } = yield* Settings
   const object = `${url}/agents/${name}?token=${Redacted.value(token)}`
   // The WebSocket retries a refused connection forever: ask once first, to fail with the reason.
-  const reached = yield* Effect.tryPromise(() => fetch(object))
+  const reached = yield* Effect.tryPromise({
+    try: () => fetch(object),
+    catch: () =>
+      new ChatError({
+        message: `Nothing answers at ${url}: start it with \`bun run example:cloudflare\`, or set HARNESS_URL`,
+      }),
+  })
   if (reached.status === 401)
     return yield* new ChatError({ message: 'HARNESS_TOKEN is not the token' })
   if (reached.status === 404)

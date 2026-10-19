@@ -94,8 +94,7 @@ export const Result = Schema.Union([ModelResult, NestedResult])
 export type Result = typeof Result.Type
 
 /** One nested call of a running tool: its task, and once it ended, its outcome. */
-export interface NestedCallState {
-  [key: string]: Schema.Json
+export type NestedCallState = {
   /** Absent only inside the commit that creates the call. */
   taskId?: number
   result?: Outcome

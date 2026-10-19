@@ -539,6 +539,20 @@ Field names, entry kinds and storage formats match pi. What changed:
 bun install
 bun run check   # format, lint, typecheck: must pass before a commit
 bun run test    # bun test src
+bun run build   # dist/: JS + .d.ts for every entry point, tests left out
 ```
+
+To try a build from another project, pack it and install the tarball:
+
+```bash
+bun run build && npm pack          # effect-harness-0.0.0.tgz (prepack builds too)
+cd ../my-app
+bun add ../effect-harness2/effect-harness-0.0.0.tgz   # or npm install <path>.tgz
+```
+
+For a live link instead, run `bun link` here, `bun link effect-harness` in the other project,
+and `bun run dev` to rebuild on change. `effect-harness/openai`, `/anthropic` and
+`/coding/sharp` need their optional peers (`@effect/ai-openai`, `@effect/ai-anthropic`,
+`sharp`) installed in that project; the other entry points run on Node and Bun as they are.
 
 `repos/` vendors Effect and pi as read-only references.

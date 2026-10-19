@@ -281,8 +281,8 @@ script that crashes halfway replays without running its calls twice.
 The `Model` service sends each request to a provider by name. Responses stream as deltas and
 end with a `done` event.
 
-A provider is a plain value. `effect-harness/openai` and `effect-harness/anthropic` ship one
-each, over `@effect/ai-openai` and `@effect/ai-anthropic` (optional peer dependencies; install the
+A provider is a plain value. `effect-harness/openai` and `effect-harness/anthropic` ship API-key
+and subscription providers over `@effect/ai-openai` and `@effect/ai-anthropic` (optional peer dependencies; install the
 one you use). Their model lists come from pi-ai's catalog, with context windows, costs and how
 each model takes reasoning.
 
@@ -344,8 +344,55 @@ const listed = yield * codex.listModels // needs HttpClient and Credentials, lik
 // [{ id: 'gpt-5.5', thinkingLevels: ['low', 'medium', 'xhigh'], serviceTiers: [...], served: true }, ...]
 ```
 
-Anthropic subscriptions (Claude Pro/Max) are not supported: pi uses them by identifying as Claude
-Code, which this harness does not do. Use an Anthropic API key.
+Claude Pro/Max subscriptions are available explicitly through `AnthropicOAuth`; ordinary API keys
+continue to use `Anthropic`. This is a browser PKCE authorization flow, **not a device code**.
+The host opens the authorization URL, then supplies the returned `code#state` or full callback
+URL. Bare codes, mismatched states, duplicate callback parameters, and expired attempts are rejected:
+
+```ts
+import { AnthropicOAuth } from 'effect-harness/anthropic'
+
+// `completion` is your host's Effect<string> from a prompt or authenticated UI.
+yield *
+  AnthropicOAuth.login({
+    name: 'claude-work',
+    onAuthorize: (url) => Console.log(`Open ${url}`),
+    completion,
+  })
+
+Model.layer([AnthropicOAuth.provider({ name: 'claude-work' })])
+// model: AnthropicOAuth.ref('claude-sonnet-5-5', 'claude-work'), reasoning: 'high'
+```
+
+For a browser application, `begin({ name })` returns a private authorization context and URL;
+retain that context on the server, then call `complete(context, callback)` after the person
+submits the callback. A CLI with a host-owned loopback listener can pass
+`redirectUri: 'http://localhost:53692/callback'` to `begin` or `login`. The library does not open
+browsers or bind ports. Attempts expire after ten minutes; `login` also bounds the whole flow
+with an optional `timeout`. Never log the authorization context or callback: Claude requires
+its PKCE verifier as the state, and the authorization URL therefore contains sensitive state.
+
+Provide `HttpClient` and a **writable, persistent** `Credentials` store to both login and the
+provider. `Credentials.layerMemory()` loses tokens on restart; `layerConfig` cannot persist
+refreshes. Refresh rotates both tokens with compare-and-set persistence; a successful new login
+replaces only the explicitly named credential and gives it a new `extra.identity`, which refresh
+preserves. No legacy auth file is read, imported, or overwritten automatically. Use distinct names
+to retain an existing API key/account, or explicitly migrate its credentials in your host.
+
+Subscription requests identify as Claude Code using its required system prefix, headers, and
+tool-name normalization. This is an unofficial compatibility integration, not an Anthropic-supported
+API-key replacement: provider policy, subscription access, or protocol changes may break it.
+Review Anthropic's terms before use. Newer Claude models that require thinking-prefix rebinding
+use adaptive reasoning even when no reasoning effort is selected; incompatible explicit native
+thinking modes are rejected. Tool schemas and tool arguments remain opaque during wire
+transformations, and tool-result images are preserved.
+`provider.listModels` discovers the account's models using the same refreshed tokens. Configure
+`models` when serving a discovered model not yet present in the bundled catalog.
+For model IDs whose discovery metadata advertises adaptive thinking, pass
+`adaptiveModels: ['discovered-model-id']` alongside `models`. This preserves adaptive mode and
+reasoning effort for models that the static catalog does not yet know.
+Claude OAuth is exposed directly rather than through the stock Accounts device-code adapter;
+hosts using an account registry should own the browser authorization interaction.
 
 When people add and remove accounts while the loop runs, use [Accounts](#accounts). Underneath,
 `Model.layerDynamic(providers)` reads the providers at each request.
@@ -507,7 +554,7 @@ tasks are all built this way.
 | `effect-harness/tool`                     | `Tool`, `Toolkit`, `ToolResult`, `Call`, `ToolTask`                                              |
 | `effect-harness/model`                    | `Model`, `Message`, `LanguageModelProvider`, `Faux`                                              |
 | `effect-harness/openai`                   | `OpenAi` and `OpenAiCodex` providers and catalogs                                                |
-| `effect-harness/anthropic`                | `Anthropic` provider and catalog                                                                 |
+| `effect-harness/anthropic`                | `Anthropic` and `AnthropicOAuth` providers, catalogs, and Claude subscription sign-in            |
 | `effect-harness/accounts`                 | `Adapter`, `Accounts`, `Account`, `AccountsRpcs`, `AccountError`                                 |
 | `…/openai/adapter`, `…/anthropic/adapter` | the stock adapters' declarations, safe in a client                                               |
 | `effect-harness/credentials`              | `Credentials`, `Credential`, `CredentialsRpcs`                                                   |
@@ -534,6 +581,8 @@ Field names, entry kinds and storage formats match pi. What changed:
 - **Errors, not throws.** A bad draft write fails the commit with `InvalidWrite`.
 
 ## Development
+
+The `effecttsgo/unstable-api-usage` rule is disabled globally because platform, RPC, and AI APIs are intentional dependencies. Other lint rules and warning-as-error enforcement remain enabled.
 
 ```bash
 bun install

@@ -13,40 +13,11 @@
     "denyWarnings": true
   },
   "rules": {
+    "effecttsgo/unstable-api-usage": "off",
     "no-nested-ternary": "error",
     "no-redeclare": "off",
     "typescript/prefer-readonly-parameter-types": "off",
     "max-classes-per-file": "off"
   },
-  "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"],
-  "overrides": [
-    {
-      "files": [
-        "src/storage/Storage.ts",
-        "src/storage/internal/jsonlStorage.ts",
-        "src/storage/internal/jsonl/**",
-        "src/storage/test/jsonl/**",
-        "src/storage/internal/sqlStorage.ts",
-        "src/storage/internal/sql/**",
-        "src/storage/test/sql/**",
-        "src/client/**",
-        "src/harness/HarnessServer.ts",
-        "src/harness/internal/server.ts",
-        "src/credentials/**",
-        "src/accounts/**",
-        "src/model/LanguageModelProvider.ts",
-        "src/model/internal/languageModel/**",
-        "src/model/test/languageModel.test.ts",
-        "src/coding/**",
-        "src/codemode/**",
-        "src/openai/**",
-        "src/anthropic/**",
-        "src/model/test/fakeApi.ts",
-        "src/model/internal/listing.ts"
-      ],
-      "rules": {
-        "effecttsgo/unstable-api-usage": "off"
-      }
-    }
-  ]
+  "extends": ["./node_modules/@effect/tsgo/oxlint-presets/recommended.json"]
 }

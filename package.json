@@ -54,6 +54,14 @@
       "types": "./dist/coding/index.d.ts",
       "default": "./dist/coding/index.js"
     },
+    "./coding/bun": {
+      "types": "./dist/coding/bun/index.d.ts",
+      "default": "./dist/coding/bun/index.js"
+    },
+    "./coding/sharp": {
+      "types": "./dist/coding/sharp/index.d.ts",
+      "default": "./dist/coding/sharp/index.js"
+    },
     "./codemode": {
       "types": "./dist/codemode/index.d.ts",
       "default": "./dist/codemode/index.js"
@@ -106,17 +114,22 @@
     "oxfmt": "0.73.0",
     "oxlint": "1.88.0",
     "oxlint-tsgolint": "7.0.2004",
+    "sharp": "0.34.5",
     "typescript": "7.0.2"
   },
   "peerDependencies": {
     "@effect/ai-anthropic": "4.0.5",
-    "@effect/ai-openai": "4.0.5"
+    "@effect/ai-openai": "4.0.5",
+    "sharp": "0.34.5"
   },
   "peerDependenciesMeta": {
     "@effect/ai-anthropic": {
       "optional": true
     },
     "@effect/ai-openai": {
+      "optional": true
+    },
+    "sharp": {
       "optional": true
     }
   }

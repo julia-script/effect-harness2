@@ -1,15 +1,16 @@
 /**
  * The `read` handler, ported from pi's `tools/read.ts`: text by lines within the limits, or one
- * image. Remarks about truncation and continuation are diagnostics; the content is only file text,
+ * image, prepared by the `ImageProcessor` in context when there is one. Remarks about truncation and continuation are diagnostics; the content is only file text,
  * or the image.
  *
  * Unlike pi, it reads the whole file and then selects lines, which gives the same result.
  */
-import { Effect } from 'effect'
+import { Effect, Option } from 'effect'
 import { DEFAULT_MAX_BYTES } from '../CodingTools.ts'
 import type { Config } from '../CodingTools.ts'
 import type { Diagnostic, Output } from '../../tool/ToolResult.ts'
 import { output, text } from '../../tool/ToolResult.ts'
+import * as ImageProcessor from '../ImageProcessor.ts'
 import * as Image from './image.ts'
 import { characterEnd, formatSize, truncateHead, utf8ByteLength } from './truncate.ts'
 import type { Truncation } from './truncate.ts'
@@ -29,14 +30,51 @@ const failed = (message: string, code?: string): Output =>
 
 const imageError = (message: string) => failed(message, 'unsupported_image')
 
+/** One image block, with what happened to it as an `info` diagnostic. */
+const imageOutput = (
+  image: { readonly data: string; readonly mimeType: string },
+  notes: ReadonlyArray<string> = [],
+): Output => {
+  const message = [`Read image file [${image.mimeType}].`, ...notes].join(' ')
+  const diagnostics: ReadonlyArray<Diagnostic> = [{ severity: 'info', code: 'image', message }]
+  return output([{ type: 'image', data: image.data, mimeType: image.mimeType }], { diagnostics })
+}
+
+/** What the processor did to the image, for the model. */
+const preparedNotes = (image: ImageProcessor.Prepared) => [
+  ...(image.convertedFrom === undefined
+    ? []
+    : [`Converted from ${image.convertedFrom} to ${image.mimeType}.`]),
+  ...(image.resized === undefined
+    ? []
+    : [
+        `Resized from ${image.resized.from.width}x${image.resized.from.height} to ${image.resized.to.width}x${image.resized.to.height}. Multiply coordinates by ${(image.resized.from.width / image.resized.to.width).toFixed(2)} to map them to the original.`,
+      ]),
+]
+
+/** One image block, prepared by the processor. */
+const preparedImage = (
+  processor: ImageProcessor.Service,
+  bytes: Uint8Array,
+  path: string,
+  mimeType: string,
+): Effect.Effect<Output, Output> =>
+  Effect.flatMap(processor.prepare(bytes, mimeType, ImageProcessor.DEFAULT_LIMITS), (image) =>
+    image === undefined
+      ? Effect.fail(
+          imageError(`${path} is an image (${mimeType}) that cannot be prepared for the model`),
+        )
+      : Effect.succeed(imageOutput(image, preparedNotes(image))),
+  )
+
 /** One image block, as it is: its format must be inline and it must fit the limits. */
-const readImage = (
+const rawImage = (
   bytes: Uint8Array,
   path: string,
   mimeType: string,
 ): Effect.Effect<Output, Output> => {
   const unshrinkable = 'and no image processor is configured to shrink it'
-  const limits = Image.IMAGE_LIMITS
+  const limits = ImageProcessor.DEFAULT_LIMITS
   if (!Image.INLINE_IMAGE_TYPES.has(mimeType))
     return Effect.fail(
       imageError(
@@ -58,12 +96,7 @@ const readImage = (
         `${path} is an image (${mimeType}) of ${size.width}x${size.height}, larger than ${limits.maxWidth}x${limits.maxHeight}, ${unshrinkable}`,
       ),
     )
-  const diagnostics: ReadonlyArray<Diagnostic> = [
-    { severity: 'info', code: 'image', message: `Read image file [${mimeType}].` },
-  ]
-  return Effect.succeed(
-    output([{ type: 'image', data: Image.toBase64(bytes), mimeType }], { diagnostics }),
-  )
+  return Effect.succeed(imageOutput({ data: Image.toBase64(bytes), mimeType }))
 }
 
 /** `Array.prototype.slice`'s conversion of an index. */
@@ -142,6 +175,10 @@ export const read = (workspace: Workspace, params: Params, config: Config) =>
       failed(`Could not read ${params.path}: ${error.message}`),
     )
     const mimeType = Image.mimeTypeOf(bytes)
-    if (mimeType !== undefined) return yield* readImage(bytes, params.path, mimeType)
+    if (mimeType !== undefined)
+      return yield* Option.match(workspace.images, {
+        onNone: () => rawImage(bytes, params.path, mimeType),
+        onSome: (processor) => preparedImage(processor, bytes, params.path, mimeType),
+      })
     return yield* readText(decoder.decode(withoutBom(bytes)), params.path, params)
   })

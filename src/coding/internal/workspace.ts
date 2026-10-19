@@ -3,6 +3,7 @@
  * and its queue of file mutations.
  */
 import { Effect, FileSystem, Option, Path, Semaphore } from 'effect'
+import { ImageProcessor } from '../ImageProcessor.ts'
 import { ChildProcessSpawner } from 'effect/process/ChildProcessSpawner'
 import type { Config } from '../CodingTools.ts'
 
@@ -12,6 +13,8 @@ export interface Workspace {
   readonly spawner: ChildProcessSpawner['Service']
   /** Run `mutate` alone among the mutations of the file at canonical path `key`. */
   readonly mutations: Map<string, Semaphore.Semaphore>
+  /** The image processor in context, if any. */
+  readonly images: Option.Option<ImageProcessor['Service']>
 }
 
 export const make = Effect.gen(function* () {
@@ -20,6 +23,7 @@ export const make = Effect.gen(function* () {
     path: yield* Path.Path,
     spawner: yield* ChildProcessSpawner,
     mutations: new Map(),
+    images: yield* Effect.serviceOption(ImageProcessor),
   }
   return workspace
 })

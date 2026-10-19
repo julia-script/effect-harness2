@@ -397,8 +397,8 @@ yield * accounts.list // [{ name: 'openrouter', status: 'ready', ... }, ...]
 
 Adding is one step: the account is kept only once listing models with its credential works. An
 account that loses its credential stays, as `needsAuth`, until `setKey` or `signIn` fixes it.
-`Accounts.layerServer` serves `AccountsRpcs` to a client; no RPC returns a secret.
-[examples/chatbot](examples/chatbot) runs it from a browser.
+`Accounts.layerServer` serves `AccountsRpcs` to a client, such as a browser; no RPC returns a
+secret.
 
 ## Credentials
 

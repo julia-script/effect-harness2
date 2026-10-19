@@ -87,9 +87,8 @@
     "prepare": "effect-tsgo patch --oxlint",
     "build": "tsc",
     "dev": "tsc --watch --preserveWatchOutput",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p examples/chatbot",
-    "test": "bun test src examples",
-    "demo:chatbot": "bun build examples/chatbot/client/main.ts --outfile examples/chatbot/public/app.js --target browser && bun examples/chatbot/server/main.ts"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src"
   },
   "dependencies": {
     "@earendil-works/pi-codemode": "1.3.0",

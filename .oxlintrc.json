@@ -42,8 +42,7 @@
         "src/openai/**",
         "src/anthropic/**",
         "src/model/test/fakeApi.ts",
-        "src/model/internal/listing.ts",
-        "examples/**"
+        "src/model/internal/listing.ts"
       ],
       "rules": {
         "effecttsgo/unstable-api-usage": "off"

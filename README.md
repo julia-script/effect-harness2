@@ -466,6 +466,10 @@ yield * store.set('anthropic', { type: 'api_key', key: Redacted.make('sk-…') }
 yield * store.list // [{ provider: 'anthropic', type: 'api_key' }]
 ```
 
+On Bun, `BunCredentials.layer({ service })` from `effect-harness/credentials/bun` keeps them in
+the OS keychain through `Bun.secrets`: one entry per provider, plus an index entry (provider and
+type, no secrets) under `${service}:index`, since a keychain cannot list its entries.
+
 Secrets decode to `Redacted`. `makeResolver({ refresh })` refreshes OAuth tokens before they
 expire: one refresh per provider at a time, written back with a compare-and-set `update`.
 

@@ -42,6 +42,10 @@
       "types": "./dist/credentials/index.d.ts",
       "default": "./dist/credentials/index.js"
     },
+    "./credentials/bun": {
+      "types": "./dist/credentials/bun/index.d.ts",
+      "default": "./dist/credentials/bun/index.js"
+    },
     "./model": {
       "types": "./dist/model/index.d.ts",
       "default": "./dist/model/index.js"

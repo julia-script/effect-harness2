@@ -1,7 +1,7 @@
 /* oxlint-disable max-lines-per-function -- describe blocks */
 /**
  * The stores, and the resolver over them. Every writable store passes the same cases: memory, and
- * memory behind `CredentialsRpcs` across the memory transport, and a `KeyValueStore`.
+ * memory behind `CredentialsRpcs` across the memory transport, a `KeyValueStore`, and a keychain.
  */
 import { describe, expect, test } from 'bun:test'
 import { Clock, ConfigProvider, Deferred, Effect, Exit, Fiber, Layer, Redacted } from 'effect'
@@ -10,6 +10,8 @@ import { KeyValueStore } from 'effect/persistence'
 import { HarnessTransport } from '../../client/index.ts'
 import { runTest } from '../../task/test/support.ts'
 import { Credentials } from '../index.ts'
+import * as keychain from '../internal/keychain.ts'
+import { makeFakeKeychain } from './fakeKeychain.ts'
 import type { Credential } from '../index.ts'
 
 const apiKey = (key: string): Credential.Credential => ({
@@ -57,6 +59,7 @@ const stores: ReadonlyArray<
   // Secrets cross as strings and decode back to `Redacted`.
   ['encoded rpc', remote(HarnessTransport.makeMemoryEncoded)],
   ['key-value', withKeyValue(Credentials.makeKeyValueStore())],
+  ['keychain', keychain.make('test', makeFakeKeychain())],
 ]
 
 for (const [name, open] of stores) {

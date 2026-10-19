@@ -40,7 +40,7 @@ const budget = (level: ThinkingLevel, ceiling: number) => {
 }
 
 /** The request options Anthropic takes, for `model`. */
-const config = (model: Info, request: Request) => {
+export const config = (model: Info, request: Request) => {
   const options = request.options ?? {}
   const entry = find(catalog, model.id)
   const maxTokens = options.maxTokens ?? model.maxTokens

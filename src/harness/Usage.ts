@@ -58,3 +58,19 @@ export const record = (
     if (total === undefined) totals[key] = cast(strictJson({ ...usage }))
     else add(total, usage)
   })
+
+/** The sum of ledgers, bucket by bucket and key by key. */
+export const sum = (states: ReadonlyArray<State>): State => {
+  const total: Draft<State> = { models: {}, tools: {} }
+  for (const state of states) {
+    for (const bucket of ['models', 'tools'] as const) {
+      const totals = total[bucket]
+      for (const [key, usage] of Object.entries(state[bucket])) {
+        const current = Object.hasOwn(totals, key) ? totals[key] : undefined
+        if (current === undefined) totals[key] = cast(strictJson({ ...usage }))
+        else add(current, usage)
+      }
+    }
+  }
+  return total
+}

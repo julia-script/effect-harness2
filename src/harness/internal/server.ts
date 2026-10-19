@@ -100,8 +100,8 @@ const conversations = (
   | 'Configure'
   | 'Agent'
   | 'Entries'
+  | 'Context'
   | 'AbortConversation'
-  | 'WaitForIdle'
 > => ({
   HasConversation: ({ conversationId }) =>
     Effect.map(harness.conversation(conversationId), (found) => found !== undefined),
@@ -123,12 +123,27 @@ const conversations = (
     withConversation(harness, conversationId, (conversation) =>
       conversation.entries(query, limit, cursor),
     ),
+  Context: ({ conversationId, at }) =>
+    withConversation(harness, conversationId, (conversation) =>
+      conversation.context(at === undefined ? {} : { at }),
+    ),
   AbortConversation: ({ conversationId, background }) =>
     withConversation(harness, conversationId, (conversation) =>
       conversation.abort(background === undefined ? {} : { background }),
     ),
+})
+
+const tasks = (
+  harness: Service,
+): Pick<Handlers, 'WaitForIdle' | 'Task' | 'WaitForTask' | 'AbortTask' | 'Usage'> => ({
   WaitForIdle: ({ conversationId }) =>
-    withConversation(harness, conversationId, (conversation) => conversation.waitForIdle),
+    conversationId === undefined
+      ? harness.scheduler.waitForIdle()
+      : withConversation(harness, conversationId, (conversation) => conversation.waitForIdle),
+  Task: ({ taskId }) => Effect.map(harness.task(taskId), (record) => record ?? null),
+  WaitForTask: ({ taskId }) => harness.scheduler.waitForTask(taskId),
+  AbortTask: ({ taskId }) => harness.scheduler.abort(taskId),
+  Usage: () => harness.usage,
 })
 
 /** A watch as frames: its value, then its changes' operations. */
@@ -183,6 +198,7 @@ export const handlers = (initializers: ReadonlyArray<Initializer>) =>
         ...creations(harness, resolver(initializers)),
         ...conversations(harness),
         ...submissions(harness),
+        ...tasks(harness),
         ...watches(harness),
       }),
     ),

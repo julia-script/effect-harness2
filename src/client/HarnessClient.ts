@@ -13,7 +13,14 @@ import { SubmissionNotFound } from '../harness/HarnessError.ts'
 import type { ConversationBusy, InitFailed, InvalidSubmission } from '../harness/HarnessError.ts'
 import type * as AgentState from '../harness/AgentState.ts'
 import type { AbortResult, Draft, Settled } from '../harness/Submission.ts'
-import type { Change, ConversationView, TaskGraph, Watch } from '../harness/ViewState.ts'
+import type {
+  Change,
+  ContextView,
+  ConversationView,
+  TaskGraph,
+  UsageState,
+  Watch,
+} from '../harness/ViewState.ts'
 import type { Op } from '../storage/schema/Document.ts'
 import type { CommitError } from '../session/SessionError.ts'
 import type { ConversationOwnership } from '../storage/schema/Conversation.ts'
@@ -21,7 +28,9 @@ import type { EntryRecord } from '../storage/schema/Entry.ts'
 import type { ConversationId, EntryId, SubmissionId, TaskId } from '../storage/schema/Ids.ts'
 import type { Cursor, Page } from '../storage/schema/Scan.ts'
 import type { SubmissionRecord } from '../storage/schema/Submission.ts'
+import type { TaskRecord } from '../storage/schema/Task.ts'
 import type { StorageError } from '../storage/StorageError.ts'
+import type { TerminalTask } from '../task/Task.ts'
 import type { SchedulerClosed, TaskNotFound } from '../task/TaskError.ts'
 import { HarnessRpcs } from './HarnessRpcs.ts'
 import type { ConversationEntryQuery, Inspection } from './HarnessRpcs.ts'
@@ -66,6 +75,8 @@ export interface Conversation {
     limit: number,
     cursor?: Cursor,
   ) => Effect.Effect<Page<EntryRecord>, Failure>
+  /** What the model sees, now or as of the visible entry `at`. */
+  readonly context: (options?: { readonly at?: EntryId }) => Effect.Effect<ContextView, Failure>
   /** Watch its active transcript and built-in documents while the scope is open. */
   readonly view: Effect.Effect<Watch<ConversationView, Failure>, Failure, Scope.Scope>
   /** Watch its agent events, from a snapshot, while the scope is open. */
@@ -97,6 +108,20 @@ export interface Service {
     id: SubmissionId,
     conversationId?: ConversationId,
   ) => Effect.Effect<AbortResult | 'not_found', Failure>
+  /** The committed record of a task, live or terminal. */
+  readonly task: (id: TaskId) => Effect.Effect<TaskRecord | undefined, Failure>
+  /** Wait for the task's terminal record; interrupting the wait leaves the task running. */
+  readonly waitForTask: (
+    id: TaskId,
+  ) => Effect.Effect<TerminalTask, Failure<TaskNotFound | SchedulerClosed>>
+  /** Abort-mark the task and wait until its run ends; `terminal` when it had already ended. */
+  readonly abortTask: (
+    id: TaskId,
+  ) => Effect.Effect<'marked' | 'terminal', Failure<TaskNotFound | StorageError>>
+  /** Wait until every ownerless conversation is idle. */
+  readonly waitForIdle: Effect.Effect<void, Failure<SchedulerClosed>>
+  /** Every conversation's `pi.usage`, summed. */
+  readonly usage: Effect.Effect<UsageState, Failure>
   /** Live tasks and unsettled submissions. */
   readonly inspect: Effect.Effect<Inspection, Failure<StorageError>>
   /** Watch every live task while the scope is open. */
@@ -170,6 +195,9 @@ const eventsFrom = <E>(batches: Stream.Stream<ReadonlyArray<AgentEvent.AgentEven
       : Effect.fail(broken('The loop started events without a snapshot'))
   })
 
+const isTerminal = (record: TaskRecord): record is TerminalTask =>
+  record.state.status === 'terminal'
+
 const submissionHandle = (rpcs: Rpcs, id: SubmissionId): Submission => ({
   id,
   status: rpcs.SubmissionStatus({ submissionId: id }),
@@ -203,6 +231,11 @@ const conversationHandle = (rpcs: Rpcs, id: ConversationId): Conversation => ({
   agent: rpcs.Agent({ conversationId: id }),
   entries: (query, limit, cursor) =>
     rpcs.Entries({ conversationId: id, query, limit, ...(cursor === undefined ? {} : { cursor }) }),
+  context: (options) =>
+    rpcs.Context({
+      conversationId: id,
+      ...(options?.at === undefined ? {} : { at: options.at }),
+    }),
   view: watched(rpcs.WatchView({ conversationId: id })),
   events: eventsFrom(rpcs.WatchEvents({ conversationId: id })),
   fork: (at, { ownership, init }) =>
@@ -241,6 +274,14 @@ export const make: Effect.Effect<Service, never, RpcClient.Protocol | Scope.Scop
         submissionId: id,
         ...(conversationId === undefined ? {} : { conversationId }),
       }),
+    task: (id) => Effect.map(rpcs.Task({ taskId: id }), (record) => record ?? undefined),
+    waitForTask: (id) =>
+      Effect.filterOrFail(rpcs.WaitForTask({ taskId: id }), isTerminal, () =>
+        broken(`The loop returned task ${id} before it was terminal`),
+      ),
+    abortTask: (id) => rpcs.AbortTask({ taskId: id }),
+    waitForIdle: rpcs.WaitForIdle({}),
+    usage: rpcs.Usage(),
     inspect: rpcs.Inspect(),
     taskGraph: watched(rpcs.WatchTaskGraph()),
   }),

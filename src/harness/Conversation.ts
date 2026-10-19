@@ -14,7 +14,7 @@ import type * as AgentEvent from './AgentEvent.ts'
 import type * as AgentState from './AgentState.ts'
 import type { ConversationBusy, InvalidSubmission } from './HarnessError.ts'
 import type { Draft, Submission } from './Submission.ts'
-import type { ConversationView, Watch } from './ViewState.ts'
+import type { ContextView, ConversationView, Watch } from './ViewState.ts'
 
 /**
  * Runs inside the creating commit, after the built-in documents. The conversation record is
@@ -83,6 +83,12 @@ export interface Conversation {
     limit: number,
     cursor?: Cursor,
   ) => Effect.Effect<Page<EntryRecord>, CommitError>
+  /**
+   * What the model sees: the messages the next request would send and the active entries they
+   * came from, now or as of the visible entry `at`, which is what a fork at `at` starts with.
+   * Writes nothing.
+   */
+  readonly context: (options?: { readonly at?: EntryId }) => Effect.Effect<ContextView, CommitError>
   /**
    * Watch the active transcript and built-in documents, from their committed state now, while
    * the scope is open. Changes fail with `SessionFailed` when the Session fails.

@@ -9,10 +9,12 @@ import { Effect, Option, Schema } from 'effect'
 import { Message } from '../../model/Message.ts'
 import type { AssistantMessage, ToolCall, ToolResultMessage } from '../../model/Message.ts'
 import type { Tx } from '../../session/Session.ts'
+import { TransactionError } from '../../session/SessionError.ts'
 import type { ContextEdit, EntryRecord } from '../../storage/schema/Entry.ts'
 import type { ConversationId, EntryId } from '../../storage/schema/Ids.ts'
 import type { ModelMessage } from '../../storage/schema/Json.ts'
 import type { Cursor } from '../../storage/schema/Scan.ts'
+import type { ContextView } from '../ViewState.ts'
 
 export const SYSTEM_KIND = 'pi.system'
 
@@ -92,6 +94,24 @@ export const read = (tx: Tx, conversationId: ConversationId, at?: EntryId) =>
     const range =
       head === undefined ? { maxEntryId: tail } : { minEntryId: head.head, maxEntryId: tail }
     return derive(head, yield* scan(tx, conversationId, range))
+  })
+
+/**
+ * The public context of a conversation, read in a commit before its first table write: now, or
+ * cut off at `at`, which must be visible from the conversation.
+ */
+export const readVisible = (tx: Tx, conversationId: ConversationId, at?: EntryId) =>
+  Effect.gen(function* () {
+    if (at !== undefined) {
+      const found = yield* tx.scanEntries({ conversationId, minEntryId: at, maxEntryId: at }, 1)
+      if (found.items.length === 0)
+        return yield* new TransactionError({
+          message: `Entry ${at} is not visible from conversation ${conversationId}`,
+        })
+    }
+    const { head, ...rest } = yield* read(tx, conversationId, at)
+    const view: ContextView = head === undefined ? rest : { head, ...rest }
+    return view
   })
 
 /** Derive the view from the entries of the range. */

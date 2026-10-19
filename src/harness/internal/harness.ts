@@ -2,6 +2,7 @@ import { Effect } from 'effect'
 import * as Session from '../../session/Session.ts'
 import type { CommitError } from '../../session/SessionError.ts'
 import { SubmissionId } from '../../storage/schema/Ids.ts'
+import type { ConversationId } from '../../storage/schema/Ids.ts'
 import type { Cursor } from '../../storage/schema/Scan.ts'
 import type { SubmissionRecord } from '../../storage/schema/Submission.ts'
 import { Storage } from '../../storage/Storage.ts'
@@ -12,6 +13,7 @@ import type { Options, Service } from '../Harness.ts'
 import * as Inbox from '../Inbox.ts'
 import * as Live from '../Live.ts'
 import * as Settings from '../Settings.ts'
+import * as Usage from '../Usage.ts'
 import { conversation, create } from './conversation.ts'
 import type { Host } from './conversation.ts'
 import { withdrawQueuedInputs } from './inbox.ts'
@@ -40,6 +42,34 @@ const schedulerOptions: Scheduler.Options = {
   settleOutcome,
   withdrawInputs: withdrawQueuedInputs,
 }
+
+/** Every conversation's ID, read on the line. */
+const conversationIds = (session: Session.Service) =>
+  readsFirst(
+    session.commit((tx) =>
+      Effect.gen(function* () {
+        const ids: Array<ConversationId> = []
+        let cursor: Cursor | undefined
+        do {
+          const page = yield* tx.scanConversations({}, SCAN_PAGE_SIZE, cursor)
+          ids.push(...page.items.map(({ id }) => id))
+          cursor = page.next
+        } while (cursor !== undefined)
+        return ids
+      }),
+    ),
+  )
+
+/** Every conversation's `pi.usage`, summed. */
+const usage = (session: Session.Service) =>
+  Effect.gen(function* () {
+    const states: Array<Usage.State> = []
+    for (const id of yield* conversationIds(session)) {
+      const state = yield* session.snapshot(Usage.document, id)
+      if (state !== undefined) states.push(state)
+    }
+    return Usage.sum(states)
+  })
 
 /** Every unsettled submission in ID order, read from Storage on the line. */
 const unsettled = (storage: Storage['Service'], session: Session.Service) =>
@@ -86,6 +116,8 @@ export const make = Effect.fnUntraced(function* (options: Options) {
       create(host, { kind: 'independent', ownership: createOptions.ownership }, createOptions.init),
     submission: submissions.get,
     abortSubmission: submissions.abort,
+    task: (id) => readsFirst(session.commit((tx) => tx.task(id))),
+    usage: usage(session),
     taskGraph: host.views.taskGraph,
     inspect: Effect.gen(function* () {
       const { scheduling, tasks } = yield* scheduler.inspect

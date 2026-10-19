@@ -37,6 +37,9 @@ bun examples/cloudflare/chat.ts "Hi there"         # prints the answer
 With a key instead of a sign-in, `OPENAI_API_KEY=… bun examples/cloudflare/chat.ts openai` adds
 an `openai` account (`OPENAI_BASE_URL` points it at any OpenAI-compatible server), and
 `ANTHROPIC_API_KEY=… bun examples/cloudflare/chat.ts anthropic` adds an `anthropic` one.
+`OPENROUTER_API_KEY=… bun examples/cloudflare/chat.ts openrouter` adds an `openrouter` account,
+an OpenAI one at `https://openrouter.ai/api/v1`; then `chat.ts use openrouter <model id>` picks
+any model OpenRouter lists.
 
 `HARNESS_NAME` picks the object (default `julia`): another name is another harness, with its own
 accounts and conversations. Objects keep their SQLite between `alchemy dev` runs.

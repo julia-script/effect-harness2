@@ -5,6 +5,7 @@
  *   bun examples/cloudflare/chat.ts codex                 # sign in with ChatGPT
  *   bun examples/cloudflare/chat.ts openai                # add OPENAI_API_KEY (OPENAI_BASE_URL optional)
  *   bun examples/cloudflare/chat.ts anthropic             # add ANTHROPIC_API_KEY
+ *   bun examples/cloudflare/chat.ts openrouter            # add OPENROUTER_API_KEY
  *   bun examples/cloudflare/chat.ts models                # every account's models
  *   bun examples/cloudflare/chat.ts use codex gpt-5.5     # answer with that account's model
  *   bun examples/cloudflare/chat.ts "Hi there"            # send a message, print the answer
@@ -65,16 +66,25 @@ const signIn = ({ accounts }: Clients) =>
       ),
     )
 
-const addKey = ({ accounts }: Clients, adapter: 'openai' | 'anthropic') =>
+/** The keyed accounts this client adds: the adapter, and where its key and URL come from. */
+const keyed = {
+  openai: { adapter: 'openai', env: 'OPENAI', apiUrl: undefined },
+  anthropic: { adapter: 'anthropic', env: 'ANTHROPIC', apiUrl: undefined },
+  // OpenRouter speaks the OpenAI Responses API, so it is an OpenAI account at another URL.
+  openrouter: { adapter: 'openai', env: 'OPENROUTER', apiUrl: 'https://openrouter.ai/api/v1' },
+} as const
+
+const addKey = ({ accounts }: Clients, name: keyof typeof keyed) =>
   Effect.gen(function* () {
-    const prefix = adapter === 'openai' ? 'OPENAI' : 'ANTHROPIC'
-    const apiKey = yield* Config.Redacted(`${prefix}_API_KEY`)
-    const apiUrl = yield* Config.option(Config.String(`${prefix}_BASE_URL`))
+    const { adapter, env, apiUrl } = keyed[name]
+    const apiKey = yield* Config.Redacted(`${env}_API_KEY`)
+    const url = yield* Config.option(Config.String(`${env}_BASE_URL`))
+    const settings = Option.getOrUndefined(url) ?? apiUrl
     const added = yield* accounts.Add({
       adapter,
-      name: adapter,
-      label: adapter,
-      settings: Option.match(apiUrl, { onNone: () => ({}), onSome: (url) => ({ apiUrl: url }) }),
+      name,
+      label: name,
+      settings: settings === undefined ? {} : { apiUrl: settings },
       apiKey,
     })
     yield* show(added)
@@ -112,6 +122,7 @@ const main = Effect.gen(function* () {
       return yield* signIn(clients)
     case 'openai':
     case 'anthropic':
+    case 'openrouter':
       return yield* addKey(clients, command)
     case 'models':
       return yield* models(clients)

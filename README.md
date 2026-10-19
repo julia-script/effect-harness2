@@ -33,6 +33,7 @@ client ──transport──▶ loop ──▶ Session ──▶ Storage
 - [Watching](#watching)
 - [Tools](#tools)
 - [Models](#models)
+- [Accounts](#accounts)
 - [Credentials](#credentials)
 - [Storage](#storage)
 - [Splitting the client and the loop](#splitting-the-client-and-the-loop)
@@ -340,11 +341,59 @@ const listed = yield * codex.listModels // needs HttpClient and Credentials, lik
 Anthropic subscriptions (Claude Pro/Max) are not supported: pi uses them by identifying as Claude
 Code, which this harness does not do. Use an Anthropic API key.
 
+When people add and remove accounts while the loop runs, use [Accounts](#accounts). Underneath,
+`Model.layerDynamic(providers)` reads the providers at each request.
+
 For any other backend, `LanguageModelProvider.make` adapts an effect/ai `LanguageModel`. Our
 loop runs the tools, so tool resolution is off; `languageModel` runs once per request.
 
 `Faux` is pi-ai's scripted provider, for tests. It can stream text, thinking and tool calls,
 fail, or answer from the request.
+
+## Accounts
+
+For a host whose people add accounts while it runs. An adapter declares a provider type once, in
+code: its settings Schema and how its accounts sign in. Accounts are its instances, added at run
+time; each one is a provider named after the account, with its credential stored under that name.
+
+```ts
+// shared: adapters import no SDK, so the browser can use them
+import { Adapter } from 'effect-harness/accounts'
+import { OpenAi, OpenAiCodex } from 'effect-harness/openai/adapter'
+export const adapters = Adapter.group(OpenAiCodex.adapter, OpenAi.adapter)
+
+// server: each adapter's implementation is a layer; a missing one is a type error
+const Live = HarnessServer.layer().pipe(
+  Layer.provide(Accounts.layerModel),
+  Layer.provide(Accounts.layer(adapters)),
+  Layer.provide([OpenAiCodex.layerAdapter(), OpenAi.layerAdapter]),
+  Layer.provide([
+    Credentials.layerKeyValueStore(),
+    KeyValueStore.layerFileSystem(dir),
+    FetchHttpClient.layer,
+  ]),
+)
+```
+
+```ts
+const accounts = yield * Accounts.Accounts
+yield *
+  accounts.add({
+    adapter: 'openai',
+    name: 'openrouter',
+    label: 'OpenRouter',
+    settings: { apiUrl: 'https://openrouter.ai/api/v1' },
+    apiKey: Redacted.make(key),
+  })
+yield *
+  Stream.runDrain(accounts.signIn({ adapter: 'openai-codex', name: 'codex-work', label: 'Work' }))
+yield * accounts.list // [{ name: 'openrouter', status: 'ready', ... }, ...]
+```
+
+Adding is one step: the account is kept only once listing models with its credential works. An
+account that loses its credential stays, as `needsAuth`, until `setKey` or `signIn` fixes it.
+`Accounts.layerServer` serves `AccountsRpcs` to a client, such as a browser; no RPC returns a
+secret.
 
 ## Credentials
 
@@ -353,6 +402,7 @@ One `Credentials` service. The layer you pick decides where the secrets live:
 | Layer                  | Where                                     |
 | ---------------------- | ----------------------------------------- |
 | `layerMemory(initial)` | in memory                                 |
+| `layerKeyValueStore()` | a `KeyValueStore`, such as files on disk  |
 | `layerConfig(names?)`  | `ConfigProvider` (.env), read-only        |
 | `layerRpc`             | a remote store, over any transport        |
 | `layerServer`          | serves the store in context to `layerRpc` |
@@ -444,21 +494,23 @@ tasks are all built this way.
 
 ## Entry points
 
-| Import                       | What                                                                                             |
-| ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `effect-harness/client`      | `HarnessClient`, `HarnessRpcs`, transports, `Init`                                               |
-| `effect-harness/harness`     | `Harness`, `HarnessServer`, `Generation`, `Compaction`, `Extension(s)`, `Settings`, `ToolSearch` |
-| `effect-harness/tool`        | `Tool`, `Toolkit`, `ToolResult`, `Call`, `ToolTask`                                              |
-| `effect-harness/model`       | `Model`, `Message`, `LanguageModelProvider`, `Faux`                                              |
-| `effect-harness/openai`      | `OpenAi` and `OpenAiCodex` providers and catalogs                                                |
-| `effect-harness/anthropic`   | `Anthropic` provider and catalog                                                                 |
-| `effect-harness/credentials` | `Credentials`, `Credential`, `CredentialsRpcs`                                                   |
-| `effect-harness/coding`      | `CodingTools`, `CodingHandlers`                                                                  |
-| `effect-harness/codemode`    | `Codemode`, `CodemodeHandlers`                                                                   |
-| `effect-harness/session`     | `Session`, `Document`, `Observation`                                                             |
-| `effect-harness/task`        | `Task`, `Registry`, `Scheduler`, `Hook`                                                          |
-| `effect-harness/storage`     | `Storage` (memory, JSONL, SQL), and `/schema`                                                    |
-| `effect-harness/delta`       | `Tracker`, `Ops`                                                                                 |
+| Import                                    | What                                                                                             |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `effect-harness/client`                   | `HarnessClient`, `HarnessRpcs`, transports, `Init`                                               |
+| `effect-harness/harness`                  | `Harness`, `HarnessServer`, `Generation`, `Compaction`, `Extension(s)`, `Settings`, `ToolSearch` |
+| `effect-harness/tool`                     | `Tool`, `Toolkit`, `ToolResult`, `Call`, `ToolTask`                                              |
+| `effect-harness/model`                    | `Model`, `Message`, `LanguageModelProvider`, `Faux`                                              |
+| `effect-harness/openai`                   | `OpenAi` and `OpenAiCodex` providers and catalogs                                                |
+| `effect-harness/anthropic`                | `Anthropic` provider and catalog                                                                 |
+| `effect-harness/accounts`                 | `Adapter`, `Accounts`, `Account`, `AccountsRpcs`, `AccountError`                                 |
+| `…/openai/adapter`, `…/anthropic/adapter` | the stock adapters' declarations, safe in a client                                               |
+| `effect-harness/credentials`              | `Credentials`, `Credential`, `CredentialsRpcs`                                                   |
+| `effect-harness/coding`                   | `CodingTools`, `CodingHandlers`                                                                  |
+| `effect-harness/codemode`                 | `Codemode`, `CodemodeHandlers`                                                                   |
+| `effect-harness/session`                  | `Session`, `Document`, `Observation`                                                             |
+| `effect-harness/task`                     | `Task`, `Registry`, `Scheduler`, `Hook`                                                          |
+| `effect-harness/storage`                  | `Storage` (memory, JSONL, SQL), and `/schema`                                                    |
+| `effect-harness/delta`                    | `Tracker`, `Ops`                                                                                 |
 
 ## How it differs from pi
 

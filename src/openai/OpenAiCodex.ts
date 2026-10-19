@@ -7,12 +7,15 @@
 import { Schema } from 'effect'
 import type { Effect } from 'effect'
 import type { HttpClient } from 'effect/http'
+import type { Layer } from 'effect'
+import * as Adapter from '../accounts/Adapter.ts'
 import type { Credentials } from '../credentials/Credentials.ts'
 import type { CredentialsError, ReadOnly } from '../credentials/CredentialsError.ts'
 import type { Definition, Listable, Ref } from '../model/Model.ts'
 import { models as catalog } from './internal/codex/catalog.ts'
 import * as auth from './internal/codex/auth.ts'
 import * as internal from './internal/codex/provider.ts'
+import * as declaration from './adapter/OpenAiCodex.ts'
 
 /** The provider name requests route by, and the credential its tokens are stored under, by default. */
 export const name = 'openai-codex'
@@ -83,3 +86,23 @@ export const ref = (modelId: string, providerName: string = name): Ref => ({
   provider: providerName,
   modelId,
 })
+
+/** The adapter's declaration; a client imports it from `effect-harness/openai/adapter`. */
+export const adapter = declaration.adapter
+
+/**
+ * The adapter's implementation, as a layer for `Accounts.layer`: each account's provider over the tokens stored under its name, and
+ * its sign-in. `options` apply to every account, such as a `baseUrl` for a stand-in server.
+ */
+export const layerAdapter = (
+  options: Omit<Options, 'name'> = {},
+): Layer.Layer<Adapter.Implemented<typeof adapter.id>> =>
+  Adapter.layer(adapter, {
+    provider: (account) => provider({ ...options, name: account.name }),
+    login: (account, onCode) =>
+      login({
+        name: account.name,
+        onCode,
+        ...(options.authUrl === undefined ? {} : { authUrl: options.authUrl }),
+      }),
+  })

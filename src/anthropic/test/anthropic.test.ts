@@ -59,7 +59,7 @@ const ask = (url: string, modelId: string, options: Model.Options) =>
     const model = yield* Model.make([
       Anthropic.provider({ apiKey: Redacted.make('sk-ant'), apiUrl: url }),
     ])
-    const info = model.info(Anthropic.ref(modelId))
+    const info = yield* model.info(Anthropic.ref(modelId))
     if (info === undefined) return yield* Effect.die(`no ${modelId}`)
     const request = { model: Anthropic.ref(modelId), messages: [user('hi')], options }
     return yield* Model.collect(model.stream(request), info)

@@ -107,7 +107,7 @@ export const requestPhase = (env: Env) => (task: Phase<'request'>, runtime: Gene
         live.generation = { attempt }
       }),
     )
-    const info = env.model.info(ref)
+    const info = yield* env.model.info(ref)
     if (info === undefined) return yield* failNoModel(runtime, ref)
     const { messages } = yield* readView(runtime, cutoff)
     const hooks = Agent.hooks(yield* agentOf(env, runtime), Hooks)
@@ -129,7 +129,7 @@ export const requestPhase = (env: Env) => (task: Phase<'request'>, runtime: Gene
 export const pollPhase = (env: Env) => (task: Phase<'poll'>, runtime: GenerationRuntime) =>
   Effect.gen(function* () {
     const { attempt, compacted, model: ref, cutoff, handle, pollAt } = task.state.checkpoint
-    if (env.model.info(ref) === undefined) return yield* failNoModel(runtime, ref)
+    if ((yield* env.model.info(ref)) === undefined) return yield* failNoModel(runtime, ref)
     yield* sleepUntil(pollAt)
     const outcome = yield* Effect.result(env.model.poll(ref, handle))
     const hooks = Agent.hooks(yield* agentOf(env, runtime), Hooks)

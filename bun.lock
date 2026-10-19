@@ -22,6 +22,14 @@
         "oxlint-tsgolint": "7.0.2004",
         "typescript": "7.0.2",
       },
+      "peerDependencies": {
+        "@effect/ai-anthropic": "4.0.5",
+        "@effect/ai-openai": "4.0.5",
+      },
+      "optionalPeers": [
+        "@effect/ai-anthropic",
+        "@effect/ai-openai",
+      ],
     },
   },
   "packages": {

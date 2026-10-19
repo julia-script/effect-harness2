@@ -95,7 +95,7 @@ const system: Message.Message = {
 const ask = (url: string, modelId: string) =>
   Effect.gen(function* () {
     const model = yield* Model.make([OpenAiCodex.provider({ baseUrl: url, authUrl: url })])
-    const info = model.info(OpenAiCodex.ref(modelId))
+    const info = yield* model.info(OpenAiCodex.ref(modelId))
     if (info === undefined) return yield* Effect.die(`no ${modelId}`)
     const request = {
       model: OpenAiCodex.ref(modelId),
@@ -212,10 +212,11 @@ describe('OpenAiCodex', () => {
         )
         const askOn = (name: string) => {
           const ref = OpenAiCodex.ref('gpt-5.5', name)
-          const info = model.info(ref)
-          return info === undefined
-            ? Effect.die(`no ${name}`)
-            : Model.collect(model.stream({ model: ref, messages: [user('hi')] }), info)
+          return Effect.flatMap(model.info(ref), (info) =>
+            info === undefined
+              ? Effect.die(`no ${name}`)
+              : Model.collect(model.stream({ model: ref, messages: [user('hi')] }), info),
+          )
         }
         const answers = [yield* askOn('codex-home'), yield* askOn('codex-work')]
         return {

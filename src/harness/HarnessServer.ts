@@ -7,6 +7,7 @@
  */
 import { Layer } from 'effect'
 import { RpcServer } from 'effect/rpc'
+import type { Rpc, RpcGroup } from 'effect/rpc'
 import { HarnessRpcs } from '../client/HarnessRpcs.ts'
 import type { Model } from '../model/Model.ts'
 import type { CommitError } from '../session/SessionError.ts'
@@ -26,11 +27,20 @@ export interface ServeOptions {
 export interface Options<Installs extends ReadonlyArray<Extension> = ReadonlyArray<Extension>>
   extends Harness.LayerOptions<Installs>, ServeOptions {}
 
+/**
+ * The handlers of `HarnessRpcs` over the `Harness` in context, without a server: for a host that
+ * serves an `RpcGroup` itself, such as a Cloudflare Durable Object.
+ */
+export const layerHandlers = (
+  options: ServeOptions = {},
+): Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof HarnessRpcs>>, never, Harness.Harness> =>
+  handlers(options.initializers ?? [])
+
 /** Serve the `Harness` in context. */
 export const layerRpcs = (
   options: ServeOptions = {},
 ): Layer.Layer<never, never, Harness.Harness | RpcServer.Protocol> =>
-  RpcServer.layer(HarnessRpcs).pipe(Layer.provide(handlers(options.initializers ?? [])))
+  RpcServer.layer(HarnessRpcs).pipe(Layer.provide(layerHandlers(options)))
 
 /**
  * The default loop, `Harness.layer`, served over the `RpcServer.Protocol` in context. It needs the

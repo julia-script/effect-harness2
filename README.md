@@ -37,6 +37,7 @@ client ──transport──▶ loop ──▶ Session ──▶ Storage
 - [Credentials](#credentials)
 - [Storage](#storage)
 - [Splitting the client and the loop](#splitting-the-client-and-the-loop)
+- [Deploying to Cloudflare](#deploying-to-cloudflare)
 - [Under the harness](#under-the-harness)
 - [Entry points](#entry-points)
 - [How it differs from pi](#how-it-differs-from-pi)
@@ -197,6 +198,9 @@ yield *
 
 Events follow pi's agent events: `run_start`, `message_update`, `tool_execution_end`,
 `compaction_start`, `usage_changed` and the rest. `client.taskGraph` watches every live task.
+
+Over a WebSocket, a watch survives a dropped connection or a restarted loop: the client opens it
+again, and its next change is the loop's state then, or a fresh `snapshot` among the events.
 
 ## Tools
 
@@ -514,6 +518,58 @@ const Client = HarnessClient.layer.pipe(
 bundles for a browser. The same transports carry `CredentialsRpcs`, so several loops can share
 one credential store.
 
+## Deploying to Cloudflare
+
+`effect-harness/cloudflare` runs the loop in a Durable Object, deployed with
+[Alchemy](https://alchemy.run) (`alchemy` and `@effect/sql-sqlite-do` are optional peers). One
+object is one loop with its accounts, credentials and conversations in the object's SQLite. Name
+it after a user or a workspace.
+
+```ts
+// agent.ts
+export default class Agent extends Cloudflare.RpcDurableObject<Agent>()(
+  'Agent',
+  { schema: HarnessObject.Rpcs },
+  // At deploy time, the Effect each activation runs.
+  Effect.succeed(
+    Effect.succeed(
+      HarnessObject.layer({ adapters }).pipe(
+        Layer.provide([OpenAiCodex.layerAdapter(), OpenAi.layerAdapter, FetchHttpClient.layer]),
+      ),
+    ),
+  ),
+) {}
+
+// worker.ts: /agents/<name> reaches the object of that name, with the token
+export default class Api extends Cloudflare.Worker<Api>()(
+  'Api',
+  { main: import.meta.url },
+  Effect.gen(function* () {
+    const agents = yield* Agent
+    const token = yield* Config.Redacted('HARNESS_TOKEN')
+    return { fetch: HarnessObject.route(agents, { token }) }
+  }),
+) {}
+
+// client: the usual transport
+HarnessClient.layer.pipe(
+  Layer.provide(HarnessTransport.layerWebSocket(`wss://${host}/agents/julia?token=${token}`)),
+)
+```
+
+Alchemy serves `HarnessObject.Rpcs` (the loop's requests and the account registry's) over
+hibernatable WebSockets. While a task is live, the object keeps itself awake with its alarm. If
+Cloudflare evicts or resets it anyway, the next activation resumes the tasks from SQLite, as after
+any restart, and clients' watches open again. The pieces are also there on their own:
+`HarnessObject.layerStorage`, `HarnessObject.layerKeepAwake`, and the handler layers
+`HarnessServer.layerHandlers` and `Accounts.layerHandlers`.
+
+[`examples/cloudflare`](examples/cloudflare) is a stack to run with `alchemy dev` or deploy, with
+a command-line client.
+
+A Worker has no file system or processes, so the coding tools and code mode do not run there, and
+neither do the Bun and sharp image processors.
+
 ## Under the harness
 
 The harness is built from layers you can use on their own.
@@ -568,6 +624,7 @@ tasks are all built this way.
 | `effect-harness/task`                     | `Task`, `Registry`, `Scheduler`, `Hook`                                                          |
 | `effect-harness/storage`                  | `Storage` (memory, JSONL, SQL), and `/schema`                                                    |
 | `effect-harness/delta`                    | `Tracker`, `Ops`                                                                                 |
+| `effect-harness/cloudflare`               | `HarnessObject`: the loop in a Durable Object, with Alchemy                                      |
 
 ## How it differs from pi
 

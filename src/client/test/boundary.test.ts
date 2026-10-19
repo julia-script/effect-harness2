@@ -37,8 +37,16 @@ const RUNTIME = new Set([
   'harness/Harness.ts',
 ])
 
-/** Internal modules a client may load: the pure replay of op batches behind `Ops.apply`. */
-const PURE = new Set(['delta/internal/apply.ts', 'delta/internal/json.ts', 'delta/internal/ops.ts'])
+/**
+ * Internal modules a client may load: the pure replay of op batches behind `Ops.apply`, and the
+ * client's own watch streams.
+ */
+const PURE = new Set([
+  'delta/internal/apply.ts',
+  'delta/internal/json.ts',
+  'delta/internal/ops.ts',
+  'client/internal/watch.ts',
+])
 
 describe('client boundary', () => {
   test('loads no internal module and no runtime service', () => {

@@ -11,6 +11,7 @@ import { Context, Effect, Layer, Stream, SubscriptionRef } from 'effect'
 import type { Redacted } from 'effect'
 import type { KeyValueStore } from 'effect/persistence'
 import { RpcServer } from 'effect/rpc'
+import type { Rpc, RpcGroup } from 'effect/rpc'
 import { layerDynamic } from '../model/Model.ts'
 import type { Model, Provider } from '../model/Model.ts'
 import type { Add, Models, SignIn, SignInEvent, Status } from './Account.ts'
@@ -91,7 +92,15 @@ export const layerModel: Layer.Layer<Model, never, Accounts | Requires> = Layer.
   Effect.map(Accounts, (accounts) => layerDynamic(accounts.providers)),
 )
 
-const handlers = AccountsRpcs.toLayer(
+/**
+ * The handlers of `AccountsRpcs` over the `Accounts` in context, without a server: for a host that
+ * serves an `RpcGroup` itself, such as a Cloudflare Durable Object.
+ */
+export const layerHandlers: Layer.Layer<
+  Rpc.ToHandler<RpcGroup.Rpcs<typeof AccountsRpcs>>,
+  never,
+  Accounts
+> = AccountsRpcs.toLayer(
   Effect.map(Accounts, (accounts) =>
     AccountsRpcs.of({
       List: () => accounts.list,
@@ -108,4 +117,4 @@ const handlers = AccountsRpcs.toLayer(
 
 /** Serve the `Accounts` in context over the `RpcServer.Protocol` in context. */
 export const layerServer: Layer.Layer<never, never, Accounts | RpcServer.Protocol> =
-  RpcServer.layer(AccountsRpcs).pipe(Layer.provide(handlers))
+  RpcServer.layer(AccountsRpcs).pipe(Layer.provide(layerHandlers))

@@ -3,25 +3,22 @@
  * `RpcClient.Protocol` in context, so it runs wherever the loop's transport reaches, the same
  * process included, and imports nothing the loop runs.
  */
-import { Context, Effect, Layer, Option, Schema, Sink, Stream } from 'effect'
+import { Context, Effect, Layer, Schema } from 'effect'
 import type { Scope } from 'effect'
 import { RpcClient } from 'effect/rpc'
-import { RpcClientDefect, RpcClientError } from 'effect/rpc/RpcClientError'
-import * as Ops from '../delta/Ops.ts'
+import type { RpcClientError } from 'effect/rpc/RpcClientError'
 import type * as AgentEvent from '../harness/AgentEvent.ts'
 import { SubmissionNotFound } from '../harness/HarnessError.ts'
 import type { ConversationBusy, InitFailed, InvalidSubmission } from '../harness/HarnessError.ts'
 import type * as AgentState from '../harness/AgentState.ts'
 import type { AbortResult, Draft, Settled } from '../harness/Submission.ts'
 import type {
-  Change,
   ContextView,
   ConversationView,
   TaskGraph,
   UsageState,
   Watch,
 } from '../harness/ViewState.ts'
-import type { Op } from '../storage/schema/Document.ts'
 import type { CommitError } from '../session/SessionError.ts'
 import type { ConversationOwnership } from '../storage/schema/Conversation.ts'
 import type { EntryRecord } from '../storage/schema/Entry.ts'
@@ -35,6 +32,7 @@ import type { SchedulerClosed, TaskNotFound } from '../task/TaskError.ts'
 import { HarnessRpcs } from './HarnessRpcs.ts'
 import type { ConversationEntryQuery, Inspection } from './HarnessRpcs.ts'
 import type { Bound, Call } from './Init.ts'
+import { broken, eventsFrom, resubscribing, watched } from './internal/watch.ts'
 
 /** How a call fails on the loop, or on the way there. */
 export type Failure<E = never> = E | CommitError | RpcClientError
@@ -144,57 +142,6 @@ const encodeInit = (bound: Bound | undefined): Effect.Effect<{ readonly init?: C
         (payload) => ({ init: { name: bound.init.name, payload } }),
       )
 
-/** The loop broke the protocol of a watch. */
-const broken = (message: string) =>
-  new RpcClientError({ reason: new RpcClientDefect({ message, cause: undefined }) })
-
-/** The first element of `stream`, and the rest, while the scope is open. */
-const first = <A, E>(stream: Stream.Stream<A, E>) =>
-  Effect.flatMap(Stream.peel(stream, Sink.head<A>()), ([head, rest]) =>
-    Option.isNone(head)
-      ? Effect.fail(broken('The loop ended a watch before its first frame'))
-      : Effect.succeed([head.value, rest] as const),
-  )
-
-type Frame<T> =
-  | { readonly type: 'value'; readonly value: T }
-  | { readonly type: 'change'; readonly ops: ReadonlyArray<Op> }
-
-/** The next value and change of a watch after one frame. */
-const replay = <T extends Schema.Json>(value: T, frame: Frame<T>): readonly [T, Change<T>] => {
-  if (frame.type === 'value')
-    return [frame.value, { value: frame.value, ops: [['r', frame.value]] }]
-  const next = Ops.apply(value, frame.ops)
-  return [next, { value: next, ops: frame.ops }]
-}
-
-/** A watch from its frames: the value they start with, then each change replayed onto it. */
-const watched = <T extends Schema.Json, E>(frames: Stream.Stream<Frame<T>, E>) =>
-  Effect.flatMap(first(frames), ([head, rest]) =>
-    head.type === 'value'
-      ? Effect.succeed<Watch<T, E>>({
-          value: head.value,
-          changes: Stream.mapAccum(
-            rest,
-            () => head.value,
-            (value, frame) => {
-              const [next, change] = replay(value, frame)
-              return [next, [change]]
-            },
-          ),
-        })
-      : Effect.fail(broken('The loop started a watch without its value')),
-  )
-
-/** Events from their batches: the first holds the snapshot. */
-const eventsFrom = <E>(batches: Stream.Stream<ReadonlyArray<AgentEvent.AgentEvent>, E>) =>
-  Effect.flatMap(first(batches), ([head, rest]) => {
-    const snapshot = head[0]
-    return snapshot?.type === 'snapshot'
-      ? Effect.succeed<AgentEvent.Events<E>>({ snapshot, batches: rest })
-      : Effect.fail(broken('The loop started events without a snapshot'))
-  })
-
 const isTerminal = (record: TaskRecord): record is TerminalTask =>
   record.state.status === 'terminal'
 
@@ -236,8 +183,8 @@ const conversationHandle = (rpcs: Rpcs, id: ConversationId): Conversation => ({
       conversationId: id,
       ...(options?.at === undefined ? {} : { at: options.at }),
     }),
-  view: watched(rpcs.WatchView({ conversationId: id })),
-  events: eventsFrom(rpcs.WatchEvents({ conversationId: id })),
+  view: watched(resubscribing(rpcs.WatchView({ conversationId: id }))),
+  events: eventsFrom(resubscribing(rpcs.WatchEvents({ conversationId: id }))),
   fork: (at, { ownership, init }) =>
     encodeInit(init).pipe(
       Effect.flatMap((encoded) => rpcs.Fork({ conversationId: id, at, ownership, ...encoded })),
@@ -283,7 +230,7 @@ export const make: Effect.Effect<Service, never, RpcClient.Protocol | Scope.Scop
     waitForIdle: rpcs.WaitForIdle({}),
     usage: rpcs.Usage(),
     inspect: rpcs.Inspect(),
-    taskGraph: watched(rpcs.WatchTaskGraph()),
+    taskGraph: watched(resubscribing(rpcs.WatchTaskGraph())),
   }),
 )
 

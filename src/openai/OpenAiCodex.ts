@@ -7,7 +7,8 @@
 import { Schema } from 'effect'
 import type { Effect } from 'effect'
 import type { HttpClient } from 'effect/http'
-import type { Implementation } from '../accounts/Adapter.ts'
+import type { Layer } from 'effect'
+import * as Adapter from '../accounts/Adapter.ts'
 import type { Credentials } from '../credentials/Credentials.ts'
 import type { CredentialsError, ReadOnly } from '../credentials/CredentialsError.ts'
 import type { Definition, Listable, Ref } from '../model/Model.ts'
@@ -90,17 +91,18 @@ export const ref = (modelId: string, providerName: string = name): Ref => ({
 export const adapter = declaration.adapter
 
 /**
- * The adapter's implementation: each account's provider over the tokens stored under its name, and
+ * The adapter's implementation, as a layer for `Accounts.layer`: each account's provider over the tokens stored under its name, and
  * its sign-in. `options` apply to every account, such as a `baseUrl` for a stand-in server.
  */
-export const implementation = (
+export const layerAdapter = (
   options: Omit<Options, 'name'> = {},
-): Implementation<typeof adapter> => ({
-  provider: (account) => provider({ ...options, name: account.name }),
-  login: (account, onCode) =>
-    login({
-      name: account.name,
-      onCode,
-      ...(options.authUrl === undefined ? {} : { authUrl: options.authUrl }),
-    }),
-})
+): Layer.Layer<Adapter.Implemented<typeof adapter.id>> =>
+  Adapter.layer(adapter, {
+    provider: (account) => provider({ ...options, name: account.name }),
+    login: (account, onCode) =>
+      login({
+        name: account.name,
+        onCode,
+        ...(options.authUrl === undefined ? {} : { authUrl: options.authUrl }),
+      }),
+  })

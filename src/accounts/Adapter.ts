@@ -4,8 +4,9 @@
  * client can use it to draw a form. Accounts are its instances, added while the host runs.
  *
  * The implementation turns an account into a `Model` provider, and signs it in when the adapter
- * takes a device code. It runs where the loop runs, given to `Group.toLayer` the way tool handlers
- * are given to `Toolkit.toLayer`; an adapter without one is a type error.
+ * takes a device code. It runs where the loop runs, as a layer: `layer` for one adapter, or
+ * `Group.toLayer` for several, the way tool handlers are given to `Toolkit.toLayer`. The registry
+ * needs one for every adapter of its group, so a missing one is a type error.
  */
 import { Context, Effect, Layer, Schema } from 'effect'
 import type { Scope } from 'effect'
@@ -138,6 +139,17 @@ export interface Group<Adapters extends Record<string, Any>> {
 /** The key of adapter `id`'s implementation. */
 export const implementation = (id: string) =>
   Context.Service<Implemented<string>, Base<Any>>(`effect-harness/accounts/Adapter/${id}`)
+
+/** Implement `adapter`, with its implementation or an Effect that builds it. */
+export const layer = <A extends Any, E = never, R = never>(
+  adapter: A,
+  build: Implementation<A> | Effect.Effect<Implementation<A>, E, R>,
+): Layer.Layer<Implemented<A['id']>, E, Exclude<R, Scope.Scope>> =>
+  Layer.effectContext(
+    Effect.map(Effect.isEffect(build) ? build : Effect.succeed(build), (built) =>
+      Context.makeUnsafe<Implemented<A['id']>>(new Map([[implementation(adapter.id).key, built]])),
+    ),
+  )
 
 /** A group of `adapters`: what a host supports. */
 export function group<const Adapters extends ReadonlyArray<Any>>(

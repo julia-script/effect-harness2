@@ -18,10 +18,8 @@ const Services = Layer.mergeAll(
   KeyValueStore.layerMemory,
   Credentials.layerMemory(),
   FetchHttpClient.layer,
-  adapters.toLayer({
-    openai: OpenAi.implementation(),
-    'openai-codex': OpenAiCodex.implementation(),
-  }),
+  OpenAi.layerAdapter,
+  OpenAiCodex.layerAdapter(),
 )
 
 describe('OpenAi.implementation', () => {

@@ -4,8 +4,9 @@
  * an API key. Its `listModels` lists what the key reaches, over the same key.
  */
 import type { HttpClient } from 'effect/http'
+import type { Layer } from 'effect'
 import type { Redacted } from 'effect'
-import type { Implementation } from '../accounts/Adapter.ts'
+import * as Adapter from '../accounts/Adapter.ts'
 import type { Credentials } from '../credentials/Credentials.ts'
 import type { Definition, Listable, Ref } from '../model/Model.ts'
 import { models as catalog } from './internal/catalog.ts'
@@ -55,18 +56,21 @@ export const ref = (modelId: string, providerName: string = name): Ref => ({
 export const adapter = declaration.adapter
 
 /**
- * The adapter's implementation: each account's provider, named after the account and reading its
+ * The adapter's implementation, as a layer for `Accounts.layer`: each account's provider, named after the account and reading its
  * key from `Credentials`. An account at a custom `apiUrl` serves the models it listed when its key
  * was checked; one at the default URL serves the catalog.
  */
-export const implementation = (): Implementation<typeof adapter> => ({
-  provider: (account) => {
-    const { apiUrl } = account.settings
-    if (apiUrl === undefined) return provider({ name: account.name })
-    return provider({
-      name: account.name,
-      apiUrl,
-      ...(account.models === undefined ? {} : { models: account.models.map((id) => ({ id })) }),
-    })
+export const layerAdapter: Layer.Layer<Adapter.Implemented<typeof adapter.id>> = Adapter.layer(
+  adapter,
+  {
+    provider: (account) => {
+      const { apiUrl } = account.settings
+      if (apiUrl === undefined) return provider({ name: account.name })
+      return provider({
+        name: account.name,
+        apiUrl,
+        ...(account.models === undefined ? {} : { models: account.models.map((id) => ({ id })) }),
+      })
+    },
   },
-})
+)

@@ -362,16 +362,11 @@ import { Adapter } from 'effect-harness/accounts'
 import { OpenAi, OpenAiCodex } from 'effect-harness/openai/adapter'
 export const adapters = Adapter.group(OpenAiCodex.adapter, OpenAi.adapter)
 
-// server: implement each adapter, then route the Model to the accounts
+// server: each adapter's implementation is a layer; a missing one is a type error
 const Live = HarnessServer.layer().pipe(
   Layer.provide(Accounts.layerModel),
   Layer.provide(Accounts.layer(adapters)),
-  Layer.provide(
-    adapters.toLayer({
-      'openai-codex': OpenAiCodex.implementation(),
-      openai: OpenAi.implementation(),
-    }),
-  ),
+  Layer.provide([OpenAiCodex.layerAdapter(), OpenAi.layerAdapter]),
   Layer.provide([
     Credentials.layerKeyValueStore(),
     KeyValueStore.layerFileSystem(dir),

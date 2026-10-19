@@ -6,7 +6,7 @@ import { Context, Effect, Layer, ManagedRuntime, Predicate } from 'effect'
 import { RpcClient } from 'effect/rpc'
 import type { RpcClientError } from 'effect/rpc/RpcClientError'
 import { HarnessClient, HarnessTransport } from 'effect-harness/client'
-import { AccountsRpcs } from '../shared/AccountsRpcs.ts'
+import { AccountsRpcs } from 'effect-harness/accounts'
 
 const socket = (path: string) =>
   HarnessTransport.layerWebSocket(
@@ -15,10 +15,10 @@ const socket = (path: string) =>
 
 export class AccountsClient extends Context.Service<
   AccountsClient,
-  RpcClient.FromGroup<typeof AccountsRpcs, RpcClientError>
+  RpcClient.FromGroup<typeof AccountsRpcs.AccountsRpcs, RpcClientError>
 >()('chatbot/client/AccountsClient') {}
 
-const Accounts = Layer.effect(AccountsClient, RpcClient.make(AccountsRpcs)).pipe(
+const Accounts = Layer.effect(AccountsClient, RpcClient.make(AccountsRpcs.AccountsRpcs)).pipe(
   Layer.provide(socket('/accounts')),
 )
 

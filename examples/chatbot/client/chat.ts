@@ -7,7 +7,7 @@ import { HarnessClient } from 'effect-harness/client'
 import type { ViewState } from 'effect-harness/client'
 import { Message } from 'effect-harness/model'
 import type { Model } from 'effect-harness/model'
-import type { Models } from '../shared/Account.ts'
+import type { Account } from 'effect-harness/accounts'
 import { h } from './dom.ts'
 import * as picker from './picker.ts'
 import { AccountsClient, run } from './runtime.ts'
@@ -26,7 +26,7 @@ interface Chat {
   readonly messages: HTMLDivElement
   readonly status: HTMLElement
   readonly input: HTMLTextAreaElement
-  groups: ReadonlyArray<Models>
+  groups: ReadonlyArray<Account.Models>
   current: Model.Ref | undefined
   reasoning: string
 }

@@ -33,6 +33,7 @@
         "src/harness/HarnessServer.ts",
         "src/harness/internal/server.ts",
         "src/credentials/**",
+        "src/accounts/**",
         "src/model/LanguageModelProvider.ts",
         "src/model/internal/languageModel/**",
         "src/model/test/languageModel.test.ts",

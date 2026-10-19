@@ -1,10 +1,14 @@
 /**
- * The accounts panel: the registered accounts, a form to add one, and the Codex device sign-in.
+ * The accounts panel: the accounts, kept current by the server's changes, a form to add one, and
+ * the Codex device sign-in.
  */
-import { Deferred, Effect, Redacted, Stream } from 'effect'
-import type { SignInEvent, Status } from '../shared/Account.ts'
+import { Deferred, Effect, Predicate, Redacted, Stream } from 'effect'
+import type { Account } from 'effect-harness/accounts'
+import { adapters } from '../shared/adapters.ts'
 import { h, valueOf } from './dom.ts'
 import { AccountsClient, run } from './runtime.ts'
+
+type Status = Account.Status
 
 type Choice = 'openai-codex' | 'openai' | 'openai-compatible' | 'anthropic'
 
@@ -14,12 +18,6 @@ const CHOICES: ReadonlyArray<readonly [Choice, string]> = [
   ['openai-compatible', 'OpenAI-compatible'],
   ['anthropic', 'Anthropic'],
 ]
-
-const KIND_LABELS: Readonly<Record<Status['kind'], string>> = {
-  'openai-codex': 'ChatGPT (Codex)',
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-}
 
 const DEFAULT_LABELS: Readonly<Record<Choice, string>> = {
   'openai-codex': 'ChatGPT',
@@ -34,8 +32,6 @@ interface Panel {
   readonly form: HTMLFormElement
   readonly signIn: HTMLDivElement
   readonly say: (text: string, kind?: 'error' | 'info') => void
-  /** The accounts changed: redraw the list, and tell the chat. */
-  readonly changed: () => void
   choice: Choice
 }
 
@@ -74,7 +70,7 @@ const button = (label: string, onClick: () => void, className?: string) =>
 
 const showCode = (
   panel: Panel,
-  event: Extract<SignInEvent, { type: 'code' }>,
+  event: Extract<Account.SignInEvent, { type: 'code' }>,
   cancel: () => void,
 ) => {
   panel.signIn.replaceChildren(
@@ -89,8 +85,8 @@ const showCode = (
   )
 }
 
-/** Sign in to Codex as `name`, showing the device code, until approved or cancelled. */
-const signIn = (panel: Panel, name: string, label: string) =>
+/** Sign in to Codex, showing the device code, until approved or cancelled. */
+const signIn = (panel: Panel, input: Account.SignIn) =>
   Effect.gen(function* () {
     panel.say('')
     panel.signIn.replaceChildren(h('p', {}, ['Asking ChatGPT for a sign-in code…']))
@@ -99,7 +95,7 @@ const signIn = (panel: Panel, name: string, label: string) =>
       run(Deferred.succeed(cancelled, void 0), panel.say)
     }
     const accounts = yield* AccountsClient
-    yield* accounts.SignInCodex({ name, label }).pipe(
+    yield* accounts.SignIn(input).pipe(
       Stream.runForEach((event) =>
         Effect.sync(() => {
           if (event.type === 'code') {
@@ -108,7 +104,6 @@ const signIn = (panel: Panel, name: string, label: string) =>
           }
           panel.say(`Signed in as ${event.account.label}.`, 'info')
           renderForm(panel)
-          panel.changed()
         }),
       ),
       Effect.race(Deferred.await(cancelled)),
@@ -121,39 +116,80 @@ const signIn = (panel: Panel, name: string, label: string) =>
     ),
   )
 
-const remove = (panel: Panel, account: Status) =>
-  Effect.flatMap(AccountsClient, (accounts) => accounts.Remove({ name: account.name })).pipe(
-    Effect.tap(() => Effect.sync(panel.changed)),
-  )
+const remove = (account: Status) =>
+  Effect.flatMap(AccountsClient, (accounts) => accounts.Remove({ name: account.name }))
+
+/** Ask for a new key in place of the account's actions, and set it once checked. */
+const askKey = (panel: Panel, account: Status, actions: HTMLElement) => {
+  const input = h('input', { attrs: { type: 'password', placeholder: 'New API key' } })
+  const save = () => {
+    panel.say('Checking the key…', 'info')
+    run(
+      Effect.flatMap(AccountsClient, (accounts) =>
+        accounts.SetKey({ name: account.name, apiKey: Redacted.make(input.value.trim()) }),
+      ).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            panel.say(`Updated ${account.label}.`, 'info')
+          }),
+        ),
+      ),
+      panel.say,
+    )
+  }
+  actions.replaceChildren(input, button('Save', save))
+  input.focus()
+}
+
+const where = (account: Status) => {
+  const { apiUrl } = account.settings
+  return Predicate.isString(apiUrl)
+    ? apiUrl
+    : (adapters.get(account.adapter)?.label ?? account.adapter)
+}
 
 const row = (panel: Panel, account: Status) => {
-  const where = account.apiUrl ?? KIND_LABELS[account.kind]
+  const auth = adapters.get(account.adapter)?.auth
+  const actions = h('div', { class: 'actions' }, [
+    auth === 'deviceCode' &&
+      button(account.status === 'ready' ? 'Sign in again' : 'Sign in', () => {
+        run(signIn(panel, { name: account.name }), panel.say)
+      }),
+    auth === 'apiKey' &&
+      account.status !== 'ready' &&
+      button('Set key', () => {
+        askKey(panel, account, actions)
+      }),
+    account.removable &&
+      button(
+        'Remove',
+        () => {
+          run(remove(account), panel.say)
+        },
+        'danger',
+      ),
+  ])
   return h('li', {}, [
-    h('span', { class: account.signedIn ? 'dot on' : 'dot off' }),
+    h('span', { class: account.status === 'ready' ? 'dot on' : 'dot off' }),
     h('div', { class: 'who' }, [
       h('strong', {}, [account.label]),
-      h('small', {}, [`${account.name} · ${where}`]),
+      h('small', {}, [`${account.name} · ${where(account)}`]),
+      account.error !== undefined && h('small', { class: 'why' }, [account.error]),
     ]),
-    account.kind === 'openai-codex' &&
-      button(account.signedIn ? 'Sign in again' : 'Sign in', () => {
-        run(signIn(panel, account.name, account.label), panel.say)
-      }),
-    button(
-      'Remove',
-      () => {
-        run(remove(panel, account), panel.say)
-      },
-      'danger',
-    ),
+    actions,
   ])
 }
 
-const refresh = (panel: Panel) =>
-  Effect.flatMap(AccountsClient, (accounts) => accounts.List()).pipe(
-    Effect.tap((all) =>
-      Effect.sync(() => {
-        panel.list.replaceChildren(...all.map((account) => row(panel, account)))
-      }),
+/** Redraw the list, and tell the chat, at every change the server reports. */
+const follow = (panel: Panel, onChange: () => void) =>
+  Effect.flatMap(AccountsClient, (accounts) =>
+    accounts.Changes().pipe(
+      Stream.runForEach((all) =>
+        Effect.sync(() => {
+          panel.list.replaceChildren(...all.map((account) => row(panel, account)))
+          onChange()
+        }),
+      ),
     ),
   )
 
@@ -161,19 +197,18 @@ const addApiKey = (panel: Panel, name: string, label: string) => {
   const apiUrl = valueOf(panel.form, 'apiUrl')
   panel.say('Checking the key…', 'info')
   return Effect.flatMap(AccountsClient, (accounts) =>
-    accounts.AddApiKey({
-      kind: panel.choice === 'anthropic' ? 'anthropic' : 'openai',
+    accounts.Add({
+      adapter: panel.choice === 'anthropic' ? 'anthropic' : 'openai',
       name,
       label,
+      settings: apiUrl === '' ? {} : { apiUrl },
       apiKey: Redacted.make(valueOf(panel.form, 'apiKey')),
-      ...(apiUrl === '' ? {} : { apiUrl }),
     }),
   ).pipe(
     Effect.tap((account) =>
       Effect.sync(() => {
         panel.say(`Added ${account.label}.`, 'info')
         renderForm(panel)
-        panel.changed()
       }),
     ),
   )
@@ -184,7 +219,9 @@ const submit = (panel: Panel) => (event: Event) => {
   const label = valueOf(panel.form, 'label')
   const name = valueOf(panel.form, 'name') || slug(label)
   run(
-    panel.choice === 'openai-codex' ? signIn(panel, name, label) : addApiKey(panel, name, label),
+    panel.choice === 'openai-codex'
+      ? signIn(panel, { adapter: 'openai-codex', name, label })
+      : addApiKey(panel, name, label),
     panel.say,
   )
 }
@@ -218,10 +255,6 @@ export const mount = (root: HTMLElement, onChange: () => void) => {
       message.className = `message ${kind}`
       message.textContent = text
     },
-    changed: () => {
-      run(refresh(panel), panel.say)
-      onChange()
-    },
     choice: 'openai-codex',
   }
   panel.form.addEventListener('submit', submit(panel))
@@ -234,5 +267,5 @@ export const mount = (root: HTMLElement, onChange: () => void) => {
     panel.signIn,
     message,
   )
-  run(refresh(panel), panel.say)
+  run(follow(panel, onChange), panel.say)
 }

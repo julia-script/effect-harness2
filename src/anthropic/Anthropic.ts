@@ -5,10 +5,12 @@
  */
 import type { HttpClient } from 'effect/http'
 import type { Redacted } from 'effect'
+import type { Implementation } from '../accounts/Adapter.ts'
 import type { Credentials } from '../credentials/Credentials.ts'
 import type { Definition, Listable, Ref } from '../model/Model.ts'
 import { models as catalog } from './internal/catalog.ts'
 import * as internal from './internal/provider.ts'
+import * as declaration from './adapter/Anthropic.ts'
 
 /** The provider name requests route by, and its API key's name in `Credentials`, by default. */
 export const name = 'anthropic'
@@ -47,4 +49,24 @@ export function provider(options: Options = {}): Listable<HttpClient.HttpClient 
 export const ref = (modelId: string, providerName: string = name): Ref => ({
   provider: providerName,
   modelId,
+})
+
+/** The adapter's declaration; a client imports it from `effect-harness/anthropic/adapter`. */
+export const adapter = declaration.adapter
+
+/**
+ * The adapter's implementation: each account's provider, named after the account and reading its
+ * key from `Credentials`. An account at a custom `apiUrl` serves the models it listed when its key
+ * was checked; one at the default URL serves the catalog.
+ */
+export const implementation = (): Implementation<typeof adapter> => ({
+  provider: (account) => {
+    const { apiUrl } = account.settings
+    if (apiUrl === undefined) return provider({ name: account.name })
+    return provider({
+      name: account.name,
+      apiUrl,
+      ...(account.models === undefined ? {} : { models: account.models.map((id) => ({ id })) }),
+    })
+  },
 })

@@ -10,11 +10,13 @@ import { Config, Effect, Layer, Option } from 'effect'
 import { FetchHttpClient, HttpRouter, HttpStaticServer } from 'effect/http'
 import { KeyValueStore } from 'effect/persistence'
 import { HarnessTransport } from 'effect-harness/client'
+import { Accounts } from 'effect-harness/accounts'
+import { Anthropic } from 'effect-harness/anthropic'
 import { Credentials } from 'effect-harness/credentials'
 import { HarnessServer } from 'effect-harness/harness'
+import { OpenAi, OpenAiCodex } from 'effect-harness/openai'
 import { Storage } from 'effect-harness/storage'
-import * as Accounts from './Accounts.ts'
-import * as AccountsServer from './AccountsServer.ts'
+import { adapters } from '../shared/adapters.ts'
 
 const optional = (name: string) =>
   Config.option(Config.String(name)).pipe(Config.map(Option.getOrUndefined))
@@ -33,16 +35,21 @@ const app = ({ port, hostname, dataDir, authUrl, baseUrl }: Config.Success<typeo
     Layer.provide(HarnessTransport.layerWebSocketServer('/harness')),
     Layer.provide([Accounts.layerModel, Storage.layerJsonl(`${dataDir}/harness`)]),
   )
-  const Registry = AccountsServer.layer.pipe(
+  const Registry = Accounts.layerServer.pipe(
     Layer.provide(HarnessTransport.layerWebSocketServer('/accounts')),
   )
   const Static = HttpStaticServer.layer({ root: `${import.meta.dir}/../public` })
-  const codex = {
-    ...(authUrl === undefined ? {} : { authUrl }),
-    ...(baseUrl === undefined ? {} : { baseUrl }),
-  }
+  const Implementations = adapters.toLayer({
+    'openai-codex': OpenAiCodex.implementation({
+      ...(authUrl === undefined ? {} : { authUrl }),
+      ...(baseUrl === undefined ? {} : { baseUrl }),
+    }),
+    openai: OpenAi.implementation(),
+    anthropic: Anthropic.implementation(),
+  })
   return HttpRouter.serve(Layer.mergeAll(Loop, Registry, Static)).pipe(
-    Layer.provide(Accounts.layer({ codex })),
+    Layer.provide(Accounts.layer(adapters)),
+    Layer.provide(Implementations),
     Layer.provide(Credentials.layerKeyValueStore()),
     Layer.provide(KeyValueStore.layerFileSystem(`${dataDir}/store`)),
     Layer.provide(FetchHttpClient.layer),

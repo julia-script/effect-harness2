@@ -62,9 +62,21 @@
       "types": "./dist/openai/index.d.ts",
       "default": "./dist/openai/index.js"
     },
+    "./openai/adapter": {
+      "types": "./dist/openai/adapter/index.d.ts",
+      "default": "./dist/openai/adapter/index.js"
+    },
     "./anthropic": {
       "types": "./dist/anthropic/index.d.ts",
       "default": "./dist/anthropic/index.js"
+    },
+    "./anthropic/adapter": {
+      "types": "./dist/anthropic/adapter/index.d.ts",
+      "default": "./dist/anthropic/adapter/index.js"
+    },
+    "./accounts": {
+      "types": "./dist/accounts/index.d.ts",
+      "default": "./dist/accounts/index.js"
     }
   },
   "scripts": {

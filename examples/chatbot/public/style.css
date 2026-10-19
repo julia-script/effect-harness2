@@ -107,6 +107,18 @@ button.danger {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.accounts small.why {
+  color: var(--danger);
+}
+.accounts .actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.accounts .actions input {
+  width: 8rem;
+  font-size: 12px;
+}
 .accounts button {
   padding: 3px 8px;
   font-size: 12px;

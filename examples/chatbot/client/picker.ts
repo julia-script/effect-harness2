@@ -3,7 +3,7 @@
  * chosen one.
  */
 import type { Model } from 'effect-harness/model'
-import type { Models } from '../shared/Account.ts'
+import type { Account } from 'effect-harness/accounts'
 import { h } from './dom.ts'
 
 const SEPARATOR = '\u0000'
@@ -18,22 +18,23 @@ export const refOf = (value: string): Model.Ref | undefined => {
 }
 
 /** The listed model `ref` names. */
-export const listedOf = (groups: ReadonlyArray<Models>, ref: Model.Ref | undefined) =>
+export const listedOf = (groups: ReadonlyArray<Account.Models>, ref: Model.Ref | undefined) =>
   ref === undefined
     ? undefined
     : groups
         .find(({ account }) => account.name === ref.provider)
         ?.models.find(({ id }) => id === ref.modelId)
 
-const group = (models: Models) => {
-  const label = `${models.account.label} (${models.account.name})`
+const group = (models: Account.Models) => {
+  const ready = models.account.status === 'ready'
+  const label = `${models.account.label} (${models.account.name})${ready ? '' : ', needs sign-in'}`
   const options = models.models.map((listed) =>
     h(
       'option',
       {
         attrs: {
           value: valueOf({ provider: models.account.name, modelId: listed.id }),
-          disabled: !listed.served,
+          disabled: !ready || !listed.served,
         },
       },
       [listed.served ? listed.name : `${listed.name} (not served)`],
@@ -49,7 +50,7 @@ const group = (models: Models) => {
 /** Fill `select` with `groups`, choosing `current`; one not listed stays as an orphan option. */
 export const fill = (
   select: HTMLSelectElement,
-  groups: ReadonlyArray<Models>,
+  groups: ReadonlyArray<Account.Models>,
   current: Model.Ref | undefined,
 ) => {
   const missing =

@@ -13,7 +13,13 @@ import {
 import { AgentEvent } from '../harness/AgentEvent.ts'
 import { Change, View } from '../harness/AgentState.ts'
 import { AbortResult, Draft, Settled } from '../harness/Submission.ts'
-import { ConversationView, Frame, TaskGraph } from '../harness/ViewState.ts'
+import {
+  ContextView,
+  ConversationView,
+  Frame,
+  TaskGraph,
+  UsageState,
+} from '../harness/ViewState.ts'
 import {
   DocumentError,
   SessionClosed,
@@ -25,6 +31,7 @@ import { EntryRecord } from '../storage/schema/Entry.ts'
 import { ConversationId, EntryId, SubmissionId, TaskId } from '../storage/schema/Ids.ts'
 import { Cursor, EntryQuery, Page } from '../storage/schema/Scan.ts'
 import { SubmissionRecord } from '../storage/schema/Submission.ts'
+import { TaskRecord } from '../storage/schema/Task.ts'
 import { StorageError, StorageRequestError } from '../storage/StorageError.ts'
 import { Inspection as SchedulerInspection } from '../task/Inspection.ts'
 import { SchedulerClosed, TaskNotFound } from '../task/TaskError.ts'
@@ -119,14 +126,41 @@ export class HarnessRpcs extends RpcGroup.make(
     success: Page(EntryRecord),
     error: CommitError,
   }),
+  /** What the model sees, now or as of a visible entry. */
+  Rpc.make('Context', {
+    payload: { conversationId: ConversationId, at: Schema.optionalKey(EntryId) },
+    success: ContextView,
+    error: CommitError,
+  }),
   Rpc.make('AbortConversation', {
     payload: { conversationId: ConversationId, background: Schema.optionalKey(Schema.Boolean) },
     error: Schema.Union([CommitError, TaskNotFound, SchedulerClosed, StorageError]),
   }),
+  /** Wait until the conversation is idle; without one, until every ownerless conversation is. */
   Rpc.make('WaitForIdle', {
-    payload: { conversationId: ConversationId },
+    payload: { conversationId: Schema.optionalKey(ConversationId) },
     error: Schema.Union([CommitError, SchedulerClosed]),
   }),
+  /** The committed record of a task; `null` for an unknown task. */
+  Rpc.make('Task', {
+    payload: { taskId: TaskId },
+    success: Schema.NullOr(TaskRecord),
+    error: CommitError,
+  }),
+  /** Wait for the task's terminal record; interrupting the wait leaves the task running. */
+  Rpc.make('WaitForTask', {
+    payload: { taskId: TaskId },
+    success: TaskRecord,
+    error: Schema.Union([CommitError, TaskNotFound, SchedulerClosed]),
+  }),
+  /** Abort-mark the task and wait until its run ends; `terminal` when it had already ended. */
+  Rpc.make('AbortTask', {
+    payload: { taskId: TaskId },
+    success: Schema.Literals(['marked', 'terminal']),
+    error: Schema.Union([CommitError, TaskNotFound, StorageError]),
+  }),
+  /** Every conversation's `pi.usage`, summed. */
+  Rpc.make('Usage', { success: UsageState, error: CommitError }),
   /** Whether the submission exists. */
   Rpc.make('HasSubmission', { payload: submission, success: Schema.Boolean, error: CommitError }),
   Rpc.make('SubmissionStatus', {

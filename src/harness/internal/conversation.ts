@@ -14,6 +14,7 @@ import type { Service as Extensions } from '../Extensions.ts'
 import type { Settings } from '../Settings.ts'
 import { current } from './agent.ts'
 import { createCompaction } from './compaction/status.ts'
+import { readVisible } from './context.ts'
 import { RESET_KIND } from './inbox.ts'
 import type { Submissions } from './submissions.ts'
 import { readsFirst } from './submissions.ts'
@@ -107,6 +108,7 @@ export const conversation = (host: Host, id: ConversationId): Conversation => ({
     readsFirst(
       host.session.commit((tx) => tx.scanEntries({ ...query, conversationId: id }, limit, cursor)),
     ),
+  context: (options) => readsFirst(host.session.commit((tx) => readVisible(tx, id, options?.at))),
   view: host.views.view(id),
   events: host.views.events(id),
   fork: (at, options) =>

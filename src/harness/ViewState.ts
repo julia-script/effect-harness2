@@ -1,6 +1,6 @@
 /**
  * What a client sees of the loop, as Schemas both sides share: the states of the built-in
- * `pi.live` and `pi.usage` documents, one conversation's view, and the task graph, ported from
+ * `pi.live` and `pi.usage` documents, one conversation's view and model context, and the task graph, ported from
  * pi's `harness/view.ts` and `harness/task-graph.ts` (spec §9.3, §9.5).
  *
  * A view is watched: its value when the watch began, then each commit's change of it with the
@@ -8,7 +8,7 @@
  */
 import { Schema } from 'effect'
 import type { Stream } from 'effect'
-import { AssistantMessage, Usage } from '../model/Message.ts'
+import { AssistantMessage, Message, Usage } from '../model/Message.ts'
 import { ConversationRecord } from '../storage/schema/Conversation.ts'
 import { Op } from '../storage/schema/Document.ts'
 import { EntryRecord } from '../storage/schema/Entry.ts'
@@ -108,6 +108,22 @@ export const ConversationView = Schema.Struct({
   docs: Schema.Record(Schema.String, JsonObject),
 })
 export type ConversationView = typeof ConversationView.Type
+
+/**
+ * What the model sees of a conversation (spec §2.1): the messages its next request would send, and
+ * the active entries they came from.
+ */
+export const ContextView = Schema.Struct({
+  /** The newest applicable head marker, if any. */
+  head: Schema.optionalKey(EntryRecord),
+  /** The active entries, oldest first: the head marker, then the entries from its head that are not markers. */
+  entries: Schema.Array(EntryRecord),
+  /** Per entry of `entries`, its messages after context edits and excluded stop reasons, before tool result ordering. */
+  contributions: Schema.Array(Schema.Array(Message)),
+  /** The model context of the next request. */
+  messages: Schema.Array(Message),
+})
+export type ContextView = typeof ContextView.Type
 
 /** A live task's durable status, without its checkpoint and outcome payloads. */
 export const TaskGraphState = Schema.Union([

@@ -94,6 +94,12 @@ main.pipe(Effect.provide(BunServices.layer), Effect.runPromise)
 it durable, swap `Storage.layerMemory` for a [store on disk](#storage). To use a real model, swap
 `faux` for a [provider](#models).
 
+`read` sends images as they are when they fit. Add an `ImageProcessor` layer to turn photos
+upright, shrink large images, and convert BMP: `BunImageProcessor.layer` from
+`effect-harness/coding/bun` uses `Bun.Image`, `SharpImageProcessor.layer` from
+`effect-harness/coding/sharp` uses `sharp` (an optional peer dependency), and
+`ImageProcessor.layer(codec)` takes any other library.
+
 `HarnessServer.layer` builds the task registry, the extension registry and the built-in
 generation, tool and compaction tasks itself. Its options override the pieces:
 
